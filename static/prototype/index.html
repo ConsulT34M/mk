@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>상담 데스크 · 말결 TM</title>
+  <link rel="stylesheet" href="desk.css">
+  <script src="desk.js" defer></script>
+</head>
+<body>
+<div class="desk" id="desk" data-pane="list">
+  <aside class="rail" aria-label="상담원 메뉴">
+    <img class="rail-logo" src="../malgyeol-tm.png" width="2172" height="724" alt="말결 TM">
+    <div class="presence"><i></i><span>상담 가능</span></div>
+    <nav>
+      <button class="nav-item" data-view="all" aria-label="전체 대화" aria-pressed="true" title="전체 대화"><i class="icon chat-icon"></i><span>대화</span></button>
+      <button class="nav-item" data-view="saved" aria-label="즐겨찾기" aria-pressed="false" title="즐겨찾기"><i class="icon bookmark-icon"></i><span>즐겨찾기</span></button>
+      <button class="nav-item" data-view="closed" aria-label="종결 상담" aria-pressed="false" title="종결 상담"><i class="icon archive-icon"></i><span>종결 상담</span></button>
+    </nav>
+    <div class="profile"><span class="agent-avatar">A1</span><div><strong>agent1</strong><small>상담원</small></div></div>
+  </aside>
+
+  <header class="topbar">
+    <h1><img class="compact-logo" src="../malgyeol-tm.png" width="2172" height="724" alt="말결 TM">상담 데스크</h1>
+    <span class="demo"><i></i>샘플 데이터</span>
+  </header>
+
+  <section class="inbox" aria-labelledby="inbox-title">
+    <div class="inbox-head">
+      <div class="title-line"><h2 id="inbox-title">대화</h2><span id="count" class="count">5</span></div>
+      <label class="search"><i class="icon search-icon"></i><input id="search" type="search" aria-label="상담 검색" placeholder="이름, 문의 내용, 상담 번호 검색"></label>
+      <div class="filters" id="filters" aria-label="상담 상태">
+        <button data-state="전체" aria-pressed="true">전체</button>
+        <button data-state="진행 중" aria-pressed="false">진행 중</button>
+        <button data-state="대기" aria-pressed="false">대기</button>
+      </div>
+    </div>
+    <div class="case-list" id="case-list" aria-label="상담 목록"></div>
+  </section>
+
+  <main class="workspace">
+    <p class="empty" id="thread-empty" hidden>표시할 대화가 없습니다.</p>
+    <section class="thread" id="thread" aria-label="선택한 상담">
+      <header class="thread-head">
+        <button class="mobile-back icon-button" id="back" aria-label="상담 목록으로" title="상담 목록">‹</button>
+        <span class="avatar" id="head-avatar"></span>
+        <div class="who"><div class="name-line"><h2 id="head-name"></h2><span id="head-state" class="status"></span></div><p id="head-subject"></p></div>
+        <div class="head-actions">
+          <button class="icon-button save-case" id="save-case" aria-label="이 상담 즐겨찾기" title="이 상담 즐겨찾기" aria-pressed="false"><i class="icon bookmark-icon"></i></button>
+          <button class="info-toggle" id="show-info" aria-controls="inspector" aria-expanded="false">상담 정보</button>
+        </div>
+      </header>
+      <div class="thread-body">
+        <div class="scroll-thread" id="scroll-thread">
+          <div class="date-line"><span>2026년 11월 24일 화요일</span></div>
+          <div class="messages" id="messages" role="log" aria-live="polite"></div>
+        </div>
+        <section class="quick-panel" id="quick-panel" aria-label="빠른 답변" hidden>
+          <div class="quick-title"><span><i class="icon chat-icon"></i>빠른 답변</span><button class="icon-button" id="close-quick" aria-label="빠른 답변 닫기">×</button></div>
+          <div class="quick-body"><small id="quick-topic"></small><p id="quick-text"></p><button class="insert" id="insert">작성창에 넣기 <span aria-hidden="true">↙</span></button></div>
+        </section>
+      </div>
+      <form class="composer" id="composer">
+        <textarea rows="2" maxlength="1000" id="answer" aria-label="답변 입력" placeholder="고객에게 보낼 답변을 입력하세요"></textarea>
+        <div class="compose-tools"><button type="button" class="quick-toggle" id="show-quick" aria-controls="quick-panel" aria-expanded="false"><i class="icon chat-icon"></i>빠른 답변</button><button class="send" type="submit" id="send" disabled>전송 <span aria-hidden="true">↑</span></button></div>
+      </form>
+    </section>
+  </main>
+
+  <button class="shade" id="shade" hidden aria-label="상담 정보 닫기"></button>
+  <aside class="inspector" id="inspector" aria-label="상담 상세 정보">
+    <div class="detail-heading"><h2>상담 상세</h2><button id="close-info" class="icon-button" aria-label="상담 정보 닫기">×</button></div>
+    <div id="detail-content">
+      <details open>
+        <summary>고객 정보</summary>
+        <div class="card-body customer"><span class="avatar" id="info-avatar"></span><div><strong id="customer-name"></strong><small id="customer-ref"></small></div></div>
+      </details>
+      <details open>
+        <summary>상담 정보</summary>
+        <dl class="card-body info-grid">
+          <dt>상담 번호</dt><dd class="mono" id="case-ref"></dd>
+          <dt>접수 채널</dt><dd>웹채팅</dd>
+          <dt>문의 유형</dt><dd id="category"></dd>
+          <dt>담당자</dt><dd id="assignee"></dd>
+        </dl>
+      </details>
+      <details open>
+        <summary>상담 메모</summary>
+        <div class="card-body"><p class="memo" id="memo"></p></div>
+      </details>
+      <details open>
+        <summary>상담 이력</summary>
+        <ol class="card-body history" id="history"></ol>
+      </details>
+    </div>
+    <p class="empty" id="detail-empty" hidden>선택한 상담이 없습니다.</p>
+  </aside>
+</div>
+
+<template id="case-template">
+  <button class="case-item" type="button" aria-pressed="false">
+    <span class="avatar case-avatar"></span>
+    <span class="case-copy">
+      <span class="case-top"><strong class="case-name"></strong><small class="case-time"></small></span>
+      <span class="case-subject"></span><span class="preview-line"></span>
+    </span>
+  </button>
+</template>
+<template id="message-template">
+  <div class="message-row">
+    <div class="message-wrap"><small class="speaker"></small><div class="bubble-line"><p class="bubble"></p><small class="at"></small></div></div>
+  </div>
+</template>
+</body>
+</html>

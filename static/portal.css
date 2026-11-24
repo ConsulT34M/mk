@@ -19,9 +19,8 @@ button:disabled { cursor: default; opacity: .68; }
 .topbar { background: var(--ink); color: white; }
 .bar-inner, .container { max-width: 1168px; margin: auto; padding-inline: 32px; }
 .bar-inner { min-height: 68px; display: flex; align-items: center; gap: 16px; }
-.brand { display: inline-flex; gap: 11px; align-items: center; font-size: 22px; font-weight: 750; letter-spacing: -.05em; text-decoration: none; color: white; }
-.brand-mark { position: relative; width: 29px; height: 23px; background: #b9e5bd; border-radius: 8px 8px 8px 2px; }
-.brand-mark::after { content: ''; position: absolute; width: 13px; height: 4px; border-block: 2px solid var(--ink); top: 7px; left: 8px; }
+.brand { display: inline-flex; flex: none; border-radius: 7px; background: white; }
+.brand img { display: block; width: 126px; height: auto; }
 .area { border-left: 1px solid #669084; padding-left: 16px; color: #d5e5da; font-size: 13px; }
 .identity { margin-left: auto; display: flex; align-items: center; gap: 20px; font-size: 14px; }
 .role { color: #c7dcd1; margin-left: 3px; font-size: 12px; }

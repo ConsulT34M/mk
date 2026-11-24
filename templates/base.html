@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}상담 데스크{% endblock %} · AI TM</title>
+  <title>{% block title %}상담 데스크{% endblock %} · 말결 TM</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='portal.css') }}">
   <script defer src="{{ url_for('static', filename='portal.js') }}"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="bar-inner">
-      <a class="brand" href="{{ url_for('queue_page') if user else url_for('home') }}">
-        <span class="brand-mark" aria-hidden="true"></span><span>AI TM</span>
+      <a class="brand" href="{{ url_for('queue_page') if user else url_for('home') }}" aria-label="말결 TM 홈">
+        <img src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">
       </a>
       <span class="area">{{ '직원 포털' if user else '고객지원' }}</span>
       {% if user %}
