@@ -30,9 +30,12 @@ async function api(path, { method = "GET", body, actor } = {}) {
 }
 
 const dateFormat = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
-document.querySelectorAll("time[datetime]").forEach(el => {
-  el.textContent = dateFormat.format(new Date(el.dateTime));
-});
+function formatTimes(root) {
+  root.querySelectorAll("time[datetime]").forEach(el => {
+    el.textContent = dateFormat.format(new Date(el.dateTime));
+  });
+}
+formatTimes(document);
 document.querySelectorAll("[data-datetime]").forEach(el => {
   if (!el.dataset.datetime) return;
   const date = new Date(el.dataset.datetime);

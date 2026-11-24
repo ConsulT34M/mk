@@ -1,6 +1,7 @@
 .git
 .env*
 .local
+design/
 .venv
 **/__pycache__
 **/*.wav

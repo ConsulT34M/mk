@@ -1,0 +1,50 @@
+{% set web = case.channel == 'WEB' %}
+{% set closed = case.status == 'CLOSED' %}
+<main class="workspace">
+  <section class="thread {{ 'phone-thread' if not web else '' }}" {% if web %}data-chat data-id="{{ case.case_id }}" data-actor="staff"{% endif %}>
+    <header class="thread-head">
+      <a class="mobile-back icon-button" href="{{ url_for('queue_page', tab=tab) }}" aria-label="상담 목록으로">‹</a>
+      <span class="avatar" data-tone="{{ 'lavender' if web else 'mint' }}"><i class="icon {{ 'chat-icon' if web else 'phone-icon' }}" aria-hidden="true"></i></span>
+      <div class="who"><div class="name-line"><h2>{{ '웹채팅 상담' if web else '전화 상담' }}</h2><span class="status" data-state="{{ '종결' if closed else '진행 중' }}" data-chat-state>{{ '종결' if closed else '진행 중' }}</span></div><p>#{{ case.case_id[:8]|upper }}</p></div>
+      <button class="info-toggle" type="button" id="show-info" aria-expanded="false" aria-controls="inspector">상담 정보</button>
+    </header>
+    {% if web %}
+    <div class="thread-body">
+      <div class="desk-messages" data-messages role="log" aria-label="상담 대화" aria-live="polite"></div>
+      <p class="chat-hint" data-chat-hint role="status"></p>
+    </div>
+    <form class="composer chat-compose" method="post" action="{{ url_for('cases.messages', case_id=case.case_id) }}" data-action="message" data-id="{{ case.case_id }}">
+      <textarea id="chat-message" name="body" rows="2" maxlength="4000" aria-label="답변 입력" placeholder="{{ '종결된 상담입니다.' if closed else '고객에게 보낼 답변을 입력하세요' }}" required {% if closed %}disabled{% endif %}></textarea>
+      <div class="compose-tools">
+        {% if not closed %}<details class="replies"><summary class="quick-toggle"><i class="icon chat-icon" aria-hidden="true"></i>빠른 답변</summary>
+          <div class="reply-options"><button type="button">안녕하세요. 문의 내용을 확인하고 안내드리겠습니다.</button><button type="button">추가로 궁금하신 점이 있으면 말씀해 주세요.</button></div>
+        </details>{% endif %}
+        <button class="send" type="submit" {% if closed %}disabled{% endif %}>전송 <span aria-hidden="true">↑</span></button>
+      </div>
+    </form>
+    {% else %}{% include "_phone.html" %}{% endif %}
+  </section>
+</main>
+<button class="shade" id="shade" type="button" aria-label="상담 정보 닫기" hidden></button>
+<aside class="inspector" id="inspector" aria-label="상담 상세 정보">
+  <div class="detail-heading"><h2>상담 상세</h2><button type="button" id="close-info" class="icon-button" aria-label="상담 정보 닫기">×</button></div>
+  <details open><summary>고객 정보</summary><div class="card-body">
+    {% if detail.customer_ref %}<small>고객 참조번호</small><p class="customer-ref">{{ detail.customer_ref }}</p>
+    {% else %}<p class="muted">등록된 고객 참조번호가 없습니다.</p>{% endif %}
+  </div></details>
+  <details open><summary>상담 정보</summary>
+    <dl class="card-body info-grid"><dt>상담 번호</dt><dd class="mono">{{ case.case_id }}</dd><dt>접수 채널</dt><dd>{{ '웹채팅' if web else '전화' }}</dd><dt>담당자</dt><dd>{{ user.login_id }}</dd></dl>
+  </details>
+  <details open><summary>처리 결과</summary><div class="card-body">
+    {% if closed %}<p class="memo">{{ detail.result_note or '기록 보관 기한이 지났습니다.' }}</p>
+    {% else %}<form method="post" action="{{ url_for('cases.close_case', case_id=case.case_id) }}" class="stack" data-action="close" data-id="{{ case.case_id }}">
+      <label>종결 메모<textarea name="result_note" rows="3" maxlength="4000" required></textarea></label>
+      <button class="secondary" type="submit">상담 종결</button>
+    </form>{% endif %}
+  </div></details>
+  <details open><summary>상담 이력</summary><ol class="card-body history">
+    <li>상담 접수<small><time datetime="{{ case.opened_at }}">{{ case.opened_at[:16] }}</time></small></li>
+    {% for change in detail.assignments %}<li>{{ change.login_id }} 배정<small><time datetime="{{ change.at }}">{{ change.at[:16] }}</time></small></li>{% endfor %}
+    {% if closed %}<li>상담 종결<small><time datetime="{{ case.closed_at }}">{{ case.closed_at[:16] }}</time></small></li>{% endif %}
+  </ol></details>
+</aside>

@@ -80,6 +80,26 @@ def main():
     web = partner.call("/cases", origin, 201)["case_id"]
     assert partner.call("/cases", origin)["case_id"] == web
     assert partner.call("/cases?support_subject_ref=" + origin["support_subject_ref"])["items"][0]["case_id"] == web
+    dashboard = "/portal/updates?tab=dashboard"
+    pending_ticket = f'data-ticket-id="{web}"'
+    assert pending_ticket in agent.call(dashboard)["html"]
+    assert pending_ticket in next_agent.call(dashboard)["html"]
+    customer.call(dashboard, expect=401)
+    admin.call(dashboard, expect=403)
+    claim = "/staff/cases/" + web + "/claim"
+    admin.call(claim, {}, 403)
+    customer.call(claim, {}, 401)
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(lambda client: client.call(claim, {}, (200, 409)), [agent, next_agent]))
+    assert sum(result.get("case_id") == web for result in results) == 1
+    assert sum(result.get("code") == "TICKET_TAKEN" for result in results) == 1
+    winner, other = (agent, next_agent) if results[0].get("case_id") == web else (next_agent, agent)
+    assert winner.call(claim, {})["case_id"] == web
+    assert len(winner.call("/staff/cases/" + web)["assignments"]) == 1
+    other.call("/staff/cases/" + web, expect=403)
+    assert pending_ticket not in other.call(dashboard)["html"]
+    assert f'data-case-id="{web}"' in winner.call("/portal/updates?tab=desk")["html"]
+    print("PASS shared ticket queue, single concurrent owner, safe retry and desk visibility", flush=True)
     subject = {"support_subject_ref": origin["support_subject_ref"]}
     room = "/cases/" + web
     code = partner.call(room + "/entry-codes", subject, 201)["entry_code"]
@@ -102,6 +122,7 @@ def main():
     agent.call(room + "/messages", {"client_message_id": uid(), "body": "접수했습니다."}, 201)
     assert len(customer.call(room + "/messages")["items"]) == 2
     agent.call("/staff/cases/" + web + "/close", {"result_note": "안내 완료"})
+    agent.call(claim, {}, 409)
     assert customer.call(room + "/messages")["read_only"]
     customer.call(room + "/messages", {"client_message_id": uid(), "body": "새 문의"}, 409)
     renewed = partner.call(room + "/entry-codes", subject, 201)["entry_code"]
@@ -110,7 +131,7 @@ def main():
 
     phone = admin.call("/staff/phone-cases", {}, 201)["case_id"]
     path = "/staff/cases/" + phone
-    admin.call(path + "/assignee", {"new_agent_id": staff["agent1"]})
+    assert agent.call(path + "/claim", {})["current_agent_id"] == staff["agent1"]
     assert "전화 응대 기록".encode() in agent.call("/portal/" + phone)
     form, mime, wav = audio_upload(uid())
     agent.call(path + "/recordings", form, 409, mime)

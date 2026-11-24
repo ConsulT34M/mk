@@ -1,0 +1,15 @@
+{% for item in items %}
+{% set web = item.channel == 'WEB' %}
+<a class="case-item" data-case-id="{{ item.case_id }}" href="{{ url_for('detail_page', case_id=item.case_id) }}" {% if item.case_id == selected_id %}aria-current="page"{% endif %} {% if item.content_expired %}data-content-expired{% endif %}>
+  <span class="avatar case-avatar" data-tone="{{ 'lavender' if web else 'mint' }}"><i class="icon {{ 'chat-icon' if web else 'phone-icon' }}" aria-hidden="true"></i></span>
+  <span class="case-copy">
+    <span class="case-top"><strong class="case-name">{{ '웹채팅 상담' if web else '전화 상담' }}</strong><small class="case-time">{{ '종결' if item.status == 'CLOSED' else '진행 중' }}</small></span>
+    <span class="case-subject">#{{ item.case_id[:8]|upper }}</span>
+    <span class="preview-line">{{ item.preview or ('종결된 상담입니다.' if item.status == 'CLOSED' else '대화가 없습니다.' if web else '응대 기록을 작성하세요.') }}</span>
+  </span>
+</a>
+{% else %}
+<div class="empty"> {{ '종결한 상담이 없습니다.' if tab == 'closed' else '진행 중인 상담이 없습니다.' }}
+  {% if tab != 'closed' %}<a class="empty-link" href="{{ url_for('queue_page', tab='dashboard') }}">대기 티켓 보기 →</a>{% endif %}
+</div>
+{% endfor %}

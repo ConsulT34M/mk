@@ -1,0 +1,17 @@
+{% for ticket in tickets %}
+{% set web = ticket.channel == 'WEB' %}
+<article class="ticket" data-ticket-id="{{ ticket.case_id }}">
+  <div class="ticket-head">
+    <span class="avatar" data-tone="{{ 'lavender' if web else 'mint' }}"><i class="icon {{ 'chat-icon' if web else 'phone-icon' }}" aria-hidden="true"></i></span>
+    <span class="status" data-state="대기">배정 대기</span>
+  </div>
+  <h4>{{ '웹채팅 상담' if web else '전화 상담' }}</h4>
+  <span class="ticket-ref" title="{{ ticket.case_id }}">#{{ ticket.case_id[:8]|upper }}</span>
+  <p class="ticket-time">접수 <time datetime="{{ ticket.opened_at }}">{{ ticket.opened_at[:16]|replace('T',' ') }}</time></p>
+  <form method="post" action="{{ url_for('cases.claim', case_id=ticket.case_id) }}" data-claim>
+    <button class="claim" type="submit" aria-label="{{ ticket.case_id[:8]|upper }} 상담 받기">상담 받기 <span aria-hidden="true">→</span></button>
+  </form>
+</article>
+{% else %}
+<p class="board-empty"><strong>대기 중인 티켓이 없습니다.</strong><span>새 상담이 접수되면 여기에 표시됩니다.</span></p>
+{% endfor %}

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from flask import g, request
 
-from db import one, stamp, utcnow
+from .db import one, stamp, utcnow
 
 STAFF_COOKIE = "tm_staff"
 CHAT_COOKIE = "tm_chat"
@@ -19,6 +19,7 @@ ERRORS = {
     "CASE_NOT_FOUND": (404, "해당 상담을 찾을 수 없습니다."),
     "RECORDING_NOT_FOUND": (404, "해당 녹취를 찾을 수 없습니다."),
     "REQUEST_KEY_CONFLICT": (409, "이미 다른 내용으로 사용한 요청 번호입니다."),
+    "TICKET_TAKEN": (409, "다른 상담원이 먼저 받은 티켓입니다."),
     "CASE_READ_ONLY": (409, "종결된 상담은 조회만 가능합니다."),
     "CHANNEL_MISMATCH": (409, "이 상담 채널에서 사용할 수 없는 기능입니다."),
     "PHONE_RESPONSE_INCOMPLETE": (422, "통화 일시, 녹취 안내 결과, 문의·안내 내용과 후속 조치를 입력해 주세요."),
@@ -103,6 +104,13 @@ def customer_session():
 def admin():
     user = staff_user()
     if user["role"] != "ADMIN":
+        raise ApiError("CASE_ACCESS_DENIED")
+    return user
+
+
+def agent():
+    user = staff_user()
+    if user["role"] != "AGENT":
         raise ApiError("CASE_ACCESS_DENIED")
     return user
 

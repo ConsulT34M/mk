@@ -4,10 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}상담 데스크{% endblock %} · 말결 TM</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='portal.css') }}">
+  {% block styles %}<link rel="stylesheet" href="{{ url_for('static', filename='portal.css') }}">{% endblock %}
   <script defer src="{{ url_for('static', filename='portal.js') }}"></script>
+  {% block scripts %}{% endblock %}
 </head>
 <body>
+  {% block layout %}
   <header class="topbar">
     <div class="bar-inner">
       <a class="brand" href="{{ url_for('queue_page') if user else url_for('home') }}" aria-label="말결 TM 홈">
@@ -23,6 +25,7 @@
     </div>
   </header>
   <main class="container">{% block main %}{% endblock %}</main>
+  {% endblock %}
   <div id="notice" class="notice" role="alert" hidden></div>
 </body>
 </html>

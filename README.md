@@ -2,6 +2,12 @@
 
 거래소 고객의 웹채팅과 모의 전화 상담을 처리하는 수탁사 직원 포털입니다. Docker Compose에서 Nginx, Flask와 MySQL 8.4를 실행합니다.
 
+## 폴더 구성
+
+- `app/`에 Flask 코드가 있습니다. 화면 템플릿은 `app/templates/`, 스타일·스크립트·서비스 로고는 `app/static/`, 상담 데스크 시안은 `app/static/prototype/`에 있습니다.
+- `mysql/schema.sql`은 데이터베이스 초기화 파일이고, `nginx/`에는 HTTPS 설정이 있습니다.
+- `tests/`에는 상담 흐름 통합 테스트가 있습니다. 로컬 디자인 원본은 `design/`에 보관합니다.
+
 ## 실행
 
 Docker Desktop의 Linux 컨테이너 엔진과 Python 3에서 프로젝트 폴더를 열고 실행합니다.
@@ -18,10 +24,10 @@ docker compose up -d --build --wait
 | 로그인 아이디 | 비밀번호가 있는 로컬 파일 | 역할 |
 |---|---|---|
 | `admin` | `.env`의 `DEMO_ADMIN_PASSWORD` | 전화 접수, 상담 배정·재배정 |
-| `agent1`, `agent2` | `.env`의 `DEMO_AGENT1_PASSWORD`, `DEMO_AGENT2_PASSWORD` | 현재 배정된 상담의 응대·종결·녹취 재생 |
+| `agent1`, `agent2` | `.env`의 `DEMO_AGENT1_PASSWORD`, `DEMO_AGENT2_PASSWORD` | 대기 티켓 수락, 배정된 상담의 응대·종결·녹취 재생 |
 
 1. 관리자로 로그인합니다. 다른 브라우저 프로필에서는 `agent1`으로 로그인합니다.
-2. 아래 명령으로 가상 고객 1번의 입장 코드를 받고 고객 채팅 화면에 붙여넣습니다. 관리자는 고객 화면에 표시된 상담 번호를 찾아 `agent1`에 배정합니다. 상담원은 ‘내 상담’에서 같은 건을 열어 대화합니다. `--customer 2`로 고객을 바꾸거나 `--new`를 추가해 새 상담을 접수할 수 있습니다.
+2. 아래 명령으로 가상 고객 1번의 입장 코드를 받고 고객 채팅 화면에 붙여넣습니다. 상담원 대시보드에는 미배정 웹채팅·전화 요청이 접수순으로 표시됩니다. ‘상담 받기’를 먼저 누른 상담원에게 티켓이 배정되고 해당 상담이 열립니다. 관리자가 지정한 상담도 ‘내 상담’에서 열 수 있습니다. `--customer 2`로 고객을 바꾸거나 `--new`를 추가해 새 상담을 접수할 수 있습니다.
 
    ```powershell
    docker compose exec -T app flask demo-entry --customer 1

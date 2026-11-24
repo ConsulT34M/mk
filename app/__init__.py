@@ -9,13 +9,13 @@ from flask import Flask, g, jsonify, make_response, redirect, render_template, r
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from cases import agents, case_detail, cases, staff_cases
-from common import (
-    CHAT_COOKIE, STAFF_COOKIE, ApiError, case_row, customer_session, deadline, digest,
+from .cases import agent_inbox, agents, case_detail, cases as cases_blueprint, staff_cases, waiting_tickets
+from .common import (
+    CHAT_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
     payload, staff_user, text_field,
 )
-from db import audit, close_db, db, new_id, one, run, stamp, utcnow
-from recordings import purge, recordings
+from .db import audit, close_db, db as get_db, new_id, one, run, stamp, utcnow
+from .recordings import purge, recordings as recordings_blueprint
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
@@ -23,8 +23,8 @@ app.config["WAV_LIMIT"] = int(os.getenv("WAV_MAX_MIB", 10)) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = app.config["WAV_LIMIT"] + 128 * 1024
 app.config["RECORDING_DIR"] = os.getenv("RECORDING_DIR", "/var/lib/tm-recordings")
 app.teardown_appcontext(close_db)
-app.register_blueprint(cases)
-app.register_blueprint(recordings)
+app.register_blueprint(cases_blueprint)
+app.register_blueprint(recordings_blueprint)
 
 
 @app.url_value_preprocessor
@@ -55,6 +55,8 @@ def api_failure(error):
         return render_template("entry.html", error=error.message), error.status
     if request.endpoint == "login" and request.mimetype == "application/x-www-form-urlencoded":
         return render_template("login.html", error=error.message), error.status
+    if request.endpoint == "cases.claim" and request.mimetype == "application/x-www-form-urlencoded":
+        return render_template("denied.html", user=staff_user(required=False), error=error.message), error.status
     return jsonify(code=error.code, message=error.message), error.status
 
 
@@ -68,15 +70,17 @@ def too_large(_error):
 def finish(response):
     if "connection" in g:
         if response.status_code >= 400:
-            db().rollback()
+            get_db().rollback()
         target = g.get("audit_target")
         if target:
             action, case_id, recording_id = target
             result = g.get("error_code", "OK" if response.status_code < 400 else str(response.status_code))
             audit(action, g.get("actor", "anonymous"), case_id, recording_id, result)
-        db().commit()
+        get_db().commit()
     response.headers["Cache-Control"] = "no-store"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # Native login and ticket forms need their same-origin Origin header.
+    form_page = request.endpoint in {"home", "login", "queue_page", "detail_page"} and response.mimetype == "text/html"
+    response.headers["Referrer-Policy"] = "same-origin" if form_page else "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = (
@@ -173,9 +177,9 @@ def queue_page():
     user = staff_user(required=False)
     if not user:
         return redirect(url_for("home"))
-    items = staff_cases()["items"]
-    team = agents()["items"] if user["role"] == "ADMIN" else []
-    return render_template("queue.html", user=user, items=items, team=team)
+    if user["role"] == "ADMIN":
+        return render_template("queue.html", user=user, items=staff_cases()["items"], team=agents()["items"])
+    return agent_desk(user)
 
 
 @app.get("/portal/<uuid:case_id>")
@@ -188,10 +192,52 @@ def detail_page(case_id):
     except ApiError as error:
         g.error_code = error.code
         return render_template("denied.html", user=user, error=error.message), error.status
+    return agent_desk(user, detail)
+
+
+def desk_lists(user, tab):
+    owned = agent_inbox(user["staff_id"])
+    active = [item for item in owned if item["status"] == "IN_PROGRESS"]
+    closed = [item for item in owned if item["status"] == "CLOSED"]
+    if tab not in {"dashboard", "desk", "closed"}:
+        tab = "desk" if active else "dashboard"
+    return {
+        "tab": tab, "items": closed if tab == "closed" else active, "tickets": waiting_tickets(),
+        "active_count": len(active), "closed_count": len(closed),
+    }
+
+
+def agent_desk(user, detail=None):
+    explicit_case = detail is not None
+    tab = request.args.get("tab")
+    if detail:
+        tab = "closed" if detail["case"]["status"] == "CLOSED" else "desk"
+    data = desk_lists(user, tab)
+    if not detail and data["tab"] != "dashboard" and data["items"]:
+        try:
+            detail = case_detail(data["items"][0]["case_id"])
+        except ApiError as error:
+            if error.code != "CASE_ACCESS_DENIED":
+                raise
+            return redirect(url_for("queue_page", tab=data["tab"]))
+    if not detail:
+        g.audit_target = ("CASE_LIST", None, None)
+    case = detail["case"] if detail else None
     return render_template(
-        "detail.html", user=user, detail=detail, case=detail["case"], actor="staff",
-        recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5)),
+        "agent.html", user=user, detail=detail, case=case, selected_id=case["case_id"] if case else None,
+        explicit_case=explicit_case, recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5)), **data,
     )
+
+
+@app.get("/portal/updates")
+def desk_updates():
+    data = desk_lists(agent(), request.args.get("tab"))
+    g.audit_target = ("CASE_LIST", None, None)
+    template = "_tickets.html" if data["tab"] == "dashboard" else "_inbox.html"
+    return {
+        "waiting": len(data["tickets"]), "active": data["active_count"], "closed": data["closed_count"],
+        "html": render_template(template, selected_id=request.args.get("case_id"), **data),
+    }
 
 
 @app.get("/chat")
@@ -226,7 +272,7 @@ def seed_demo():
     if not one("SELECT case_id FROM support_case WHERE case_id=%s", (phone_id,)):
         run("INSERT INTO support_case (case_id,channel) VALUES (%s,'PHONE')", (phone_id,))
         run("INSERT INTO phone_response (case_id) VALUES (%s)", (phone_id,))
-    db().commit()
+    get_db().commit()
 
 
 @app.cli.command("demo-entry")

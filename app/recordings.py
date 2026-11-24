@@ -7,8 +7,8 @@ from pathlib import Path
 
 from flask import Blueprint, current_app, g, request, send_file
 
-from common import ApiError, assigned_case, case_row, channel, deadline, uuid_field, writable
-from db import audit, db, new_id, one, rows, run, stamp, utcnow
+from .common import ApiError, assigned_case, case_row, channel, deadline, uuid_field, writable
+from .db import audit, db, new_id, one, rows, run, stamp, utcnow
 
 recordings = Blueprint("recordings", __name__)
 

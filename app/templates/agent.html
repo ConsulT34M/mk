@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ '대시보드' if tab == 'dashboard' else '상담 데스크' }}{% endblock %}
+{% block styles %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='prototype/desk.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='agent.css') }}">
+{% endblock %}
+{% block scripts %}<script defer src="{{ url_for('static', filename='agent.js') }}"></script>{% endblock %}
+{% block layout %}
+{% set board = tab == 'dashboard' %}
+<div class="desk" id="desk" data-tab="{{ tab }}" data-pane="{{ 'chat' if explicit_case else 'list' }}" data-selected="{{ selected_id or '' }}" {% if detail and detail.content_expired %}data-content-expired{% endif %}>
+  <aside class="rail" aria-label="상담원 메뉴">
+    <img class="rail-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">
+    <nav aria-label="상담 데스크">
+      {% for key, label, icon in [('dashboard','대시보드','dashboard-icon'),('desk','내 상담','chat-icon'),('closed','종결 상담','archive-icon')] %}
+      <a class="nav-item" href="{{ url_for('queue_page', tab=key) }}" title="{{ label }}" aria-label="{{ label }}" {% if tab == key %}aria-current="page"{% endif %}>
+        <i class="icon {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
+        {% if key == 'dashboard' %}<small class="nav-count" data-total="waiting" aria-label="대기 티켓">{{ tickets|length }}</small>{% endif %}
+      </a>
+      {% endfor %}
+    </nav>
+    <div class="profile"><span class="agent-avatar">{{ user.login_id[:2]|upper }}</span><div><strong>{{ user.login_id }}</strong><small>상담원</small></div></div>
+  </aside>
+  <header class="topbar">
+    <h1><img class="compact-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">상담 데스크</h1>
+    <span id="sync-status" role="status"></span>
+    <button type="button" class="logout" data-logout>로그아웃</button>
+  </header>
+  {% if board %}
+  <main class="dashboard">
+    <div class="board-inner">
+      <h2>대시보드</h2>
+      <div class="board-totals">
+        <div class="total waiting"><span>대기 티켓</span><strong data-total="waiting">{{ tickets|length }}</strong></div>
+        <a class="total" href="{{ url_for('queue_page', tab='desk') }}"><span>내 진행 상담 <i aria-hidden="true">↗</i></span><strong data-total="active">{{ active_count }}</strong></a>
+        <a class="total" href="{{ url_for('queue_page', tab='closed') }}"><span>내 종결 상담 <i aria-hidden="true">↗</i></span><strong data-total="closed">{{ closed_count }}</strong></a>
+      </div>
+      <div class="board-heading"><h3>받을 수 있는 티켓</h3><span>접수순</span></div>
+      <p class="board-help">상담 받기를 누르면 내 상담으로 배정됩니다.</p>
+      <div id="live-list" class="ticket-grid">{% include "_tickets.html" %}</div>
+    </div>
+  </main>
+  {% else %}
+  <section class="inbox" aria-labelledby="inbox-title">
+    <div class="inbox-head">
+      <div class="title-line"><h2 id="inbox-title">{{ '종결 상담' if tab == 'closed' else '내 상담' }}</h2><span class="count" data-total="{{ 'closed' if tab == 'closed' else 'active' }}">{{ items|length }}</span></div>
+      <label class="search"><i class="icon search-icon" aria-hidden="true"></i><input id="inbox-search" type="search" aria-label="상담 검색" placeholder="상담 번호, 채널, 내용 검색"></label>
+    </div>
+    <div class="case-list"><div id="live-list">{% include "_inbox.html" %}</div><p class="empty" id="no-matches" hidden>검색 결과가 없습니다.</p></div>
+  </section>
+  {% if case %}{% include "_agent_case.html" %}{% else %}
+  <main class="workspace vacant"><p>선택한 상담이 없습니다.</p><a href="{{ url_for('queue_page', tab='dashboard') }}">대기 티켓 보기 →</a></main>
+  <aside class="inspector"><h2>상담 상세</h2><p class="empty">상담을 선택하면 정보가 표시됩니다.</p></aside>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

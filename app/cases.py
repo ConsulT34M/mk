@@ -3,15 +3,15 @@ import os
 import secrets
 from datetime import datetime, timezone
 
-from flask import Blueprint, g, request
+from flask import Blueprint, g, redirect, request, url_for
 
-from common import (
-    CHAT_COOKIE, ApiError, admin, assigned_case, case_info, case_row, channel,
+from .common import (
+    CHAT_COOKIE, ApiError, admin, agent, assigned_case, case_info, case_row, channel,
     content_visible, customer_session, deadline, digest, payload, staff_user, status,
     text_field, uuid_field, writable,
 )
-from db import new_id, one, rows, run, stamp, utcnow
-from recordings import recording_info
+from .db import new_id, one, rows, run, stamp, utcnow
+from .recordings import recording_info
 
 cases = Blueprint("cases", __name__)
 
@@ -80,6 +80,31 @@ def agents():
     return {"items": rows("SELECT staff_id, login_id FROM staff_account WHERE role='AGENT' AND is_active=1 ORDER BY login_id")}
 
 
+def waiting_tickets():
+    items = rows(
+        "SELECT case_id, channel, opened_at FROM support_case "
+        "WHERE current_agent_id IS NULL AND closed_at IS NULL ORDER BY opened_at, case_id"
+    )
+    for item in items:
+        item["opened_at"] = stamp(item["opened_at"])
+    return items
+
+
+def agent_inbox(staff_id):
+    items = rows(
+        "SELECT c.*, CASE WHEN c.channel='PHONE' THEN LEFT(p.inquiry,100) ELSE "
+        "(SELECT LEFT(m.body,100) FROM chat_message m WHERE m.case_id=c.case_id "
+        "ORDER BY m.message_id DESC LIMIT 1) END AS preview "
+        "FROM support_case c LEFT JOIN phone_response p ON p.case_id=c.case_id "
+        "WHERE c.current_agent_id=%s ORDER BY c.opened_at DESC, c.case_id", (staff_id,),
+    )
+    result = []
+    for item in items:
+        expired = not content_visible(item)
+        result.append(dict(case_info(item), preview=None if expired else item["preview"], content_expired=expired))
+    return result
+
+
 @cases.post("/staff/phone-cases")
 def new_phone_case():
     admin()
@@ -97,12 +122,29 @@ def assign(case_id):
     writable(case)
     if not one("SELECT staff_id FROM staff_account WHERE staff_id=%s AND role='AGENT' AND is_active=1", (new_agent,)):
         raise ApiError("AGENT_UNAVAILABLE")
+    return set_assignee(case, new_agent, user["staff_id"])
+
+
+@cases.post("/staff/cases/<uuid:case_id>/claim")
+def claim(case_id):
+    user = agent()
+    case = case_row(case_id, lock=True)
+    writable(case)
+    if case["current_agent_id"] not in (None, user["staff_id"]):
+        raise ApiError("TICKET_TAKEN")
+    result = set_assignee(case, user["staff_id"], user["staff_id"])
+    if request.mimetype == "application/x-www-form-urlencoded":
+        return redirect(url_for("detail_page", case_id=case_id), code=303)
+    return result
+
+
+def set_assignee(case, new_agent, changed_by):
     if case["current_agent_id"] != new_agent:
         run(
             "INSERT INTO assignment_history (case_id, previous_agent_id, new_agent_id, changed_by) VALUES (%s,%s,%s,%s)",
-            (case_id, case["current_agent_id"], new_agent, user["staff_id"]),
+            (case["case_id"], case["current_agent_id"], new_agent, changed_by),
         )
-        run("UPDATE support_case SET current_agent_id=%s WHERE case_id=%s", (new_agent, case_id))
+        run("UPDATE support_case SET current_agent_id=%s WHERE case_id=%s", (new_agent, case["case_id"]))
         case["current_agent_id"] = new_agent
     return case_info(case)
 
@@ -125,8 +167,14 @@ def case_detail(case_id):
     case = assigned_case(case_id)
     visible = content_visible(case)
     recs = rows("SELECT * FROM recording WHERE case_id=%s ORDER BY expires_at DESC", (case_id,))
+    assignments = rows(
+        "SELECT a.changed_at, s.login_id FROM assignment_history a JOIN staff_account s ON s.staff_id=a.new_agent_id "
+        "WHERE a.case_id=%s ORDER BY a.assignment_id", (case_id,),
+    )
     return {
         "case": case_info(case), "result_note": case["result_note"] if visible else None,
+        "customer_ref": case["support_subject_ref"] if visible else None, "content_expired": not visible,
+        "assignments": [{"login_id": a["login_id"], "at": stamp(a["changed_at"])} for a in assignments],
         "phone_response": phone_info(case_id) if visible and case["channel"] == "PHONE" else None,
         "recordings": [recording_info(item) for item in recs],
     }
