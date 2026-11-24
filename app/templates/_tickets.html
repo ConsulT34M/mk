@@ -1,11 +1,12 @@
 <table class="ticket-table" aria-labelledby="ticket-title">
-  <thead><tr><th scope="col">접수 시각</th><th scope="col">티켓 번호</th><th scope="col">상담 채널</th><th scope="col">배정</th></tr></thead>
+  <thead><tr><th scope="col">접수 시각</th><th scope="col">문의 유형 / 번호</th><th scope="col">상담 채널</th><th scope="col">현재 대기</th><th scope="col">배정</th></tr></thead>
   <tbody>
   {% for ticket in tickets %}
     <tr data-ticket-id="{{ ticket.case_id }}">
       <td><time data-ticket-time datetime="{{ ticket.opened_at }}">{{ ticket.opened_at[5:10]|replace('-','.') }} {{ ticket.opened_at[11:16] }} UTC</time></td>
-      <td class="ticket-ref" title="{{ ticket.case_id }}">#{{ ticket.case_id[:8]|upper }}</td>
+      <td class="ticket-ref" title="{{ ticket.case_id }}">{{ topic_names.get(ticket.inquiry_type,'미분류') }}<small>#{{ ticket.case_id[:8]|upper }}</small></td>
       <td>{{ '웹채팅' if ticket.channel == 'WEB' else '전화' }}</td>
+      <td>{{ ticket.wait_seconds|duration }}</td>
       <td>
         <form method="post" action="{{ url_for('cases.claim', case_id=ticket.case_id) }}" data-claim>
           <button class="claim" type="submit" aria-label="{{ ticket.case_id[:8]|upper }} 상담 받기">상담 받기</button>
@@ -13,7 +14,7 @@
       </td>
     </tr>
   {% else %}
-    <tr><td colspan="4" class="empty-tickets">대기 중인 상담 요청이 없습니다.</td></tr>
+    <tr><td colspan="5" class="empty-tickets">대기 중인 상담 요청이 없습니다.</td></tr>
   {% endfor %}
   </tbody>
 </table>

@@ -172,6 +172,49 @@ def check_ticket_deletion(admin, agent, customer, partner):
     print("PASS ticket deletion, list and queue removal, revoked chat access, intake retry and audit", flush=True)
 
 
+def check_inquiry_popup(base, context, admin, agent):
+    visitor, outsider = Client(base, context), Client(base, context)
+    def listed_tickets():
+        return {row["case_id"] for row in admin.call("/staff/cases")["items"]}
+
+    before = listed_tickets()
+    for client in (visitor, outsider):
+        client.headers["X-Chat-Actor"] = "inquiry"
+        assert "문의하기".encode() in client.call("/inquiry")
+    assert listed_tickets() == before
+    form_type = "application/x-www-form-urlencoded"
+    with ThreadPoolExecutor(2) as pool:
+        pages = list(pool.map(lambda _: visitor.call("/inquiry/open", b"", 200, form_type), range(2)))
+    ticket, = listed_tickets() - before
+    assert all(f'data-id="{ticket}"'.encode() in page for page in pages)
+    assert ticket in agent.call("/portal/updates?tab=dashboard")["html"]
+    messages = "/cases/" + ticket + "/messages"
+    outsider.call(messages, expect=401)
+    outsider.call("/inquiry/open", b"", 200, form_type)
+    outsider.call(messages, expect=403)
+    outsider.call(messages, {"client_message_id": uid(), "body": "다른 고객"}, 403)
+    visitor.call(messages, {"client_message_id": uid(), "body": "고객의 첫 문의"}, 201)
+    assert visitor.call(messages)["status"] == "QUEUED"
+    assert ticket.encode() in visitor.call("/inquiry/open", b"", 200, form_type)
+    agent.call("/staff/cases/" + ticket + "/claim", {})
+    assert agent.call(messages)["items"][0]["body"] == "고객의 첫 문의"
+    agent.call(messages, {"client_message_id": uid(), "body": "상담원 답변"}, 201)
+    reply = visitor.call(messages)
+    assert reply["status"] == "IN_PROGRESS" and reply["items"][-1]["body"] == "상담원 답변"
+    finished = ("closed_case_id=" + ticket).encode()
+    assert ticket.encode() in visitor.call("/inquiry/open", finished, 200, form_type)
+    agent.call("/staff/cases/" + ticket + "/close", {"result_note": "답변 완료"})
+    assert visitor.call(messages)["read_only"] and visitor.call(messages)["status"] == "CLOSED"
+    visitor.call(messages, {"client_message_id": uid(), "body": "종결 후 전송"}, 409)
+    before = listed_tickets()
+    visitor.call("/inquiry/open", finished, 200, form_type)
+    visitor.call("/inquiry/open", finished, 200, form_type)
+    next_ticket, = listed_tickets() - before
+    assert visitor.call("/cases/" + next_ticket + "/messages")["items"] == []
+    visitor.call(messages, expect=403)
+    print("PASS inquiry popup intake, concurrent open, isolated customers, two-way chat, resume and new inquiry", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", required=True, type=int)
@@ -194,6 +237,7 @@ def main():
         assert result["destination"] == ("/admin" if name == "admin" else "/portal")
     check_admin_accounts(base, context, admin, agent, partner)
     check_ticket_deletion(admin, agent, customer, partner)
+    check_inquiry_popup(base, context, admin, agent)
     staff = {row["login_id"]: row["staff_id"] for row in admin.call("/staff/agents")["items"]}
     assert "관리자 대시보드".encode() in admin.call("/portal")
     admin.call("/staff/phone-cases", {}, 404)

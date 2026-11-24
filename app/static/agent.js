@@ -10,6 +10,7 @@ if (desk.dataset.selected) listURL.searchParams.set("case_id", desk.dataset.sele
 let previousHTML;
 let previousQuota;
 let previousNotes;
+const lastBoard = {};
 let refreshing = false;
 
 function filterInbox() {
@@ -31,6 +32,14 @@ async function refreshDesk() {
   try {
     const data = await api(listURL);
     syncStatus.textContent = "";
+    for (const [id,key] of [["live-chart","chart_html"],["live-notices","notice_html"]]) {
+      const host = document.getElementById(id);
+      if (host && data[key] !== undefined && data[key] !== lastBoard[key] && !host.contains(document.activeElement) && !host.querySelector("details[open]")) {
+        host.innerHTML = data[key];
+        formatTimes(host);
+        lastBoard[key] = data[key];
+      }
+    }
     document.querySelectorAll("[data-total]").forEach(el => { el.textContent = data[el.dataset.total]; });
     if (data.quota_html && data.quota_html !== previousQuota) {
       document.getElementById("live-quota").innerHTML = data.quota_html;

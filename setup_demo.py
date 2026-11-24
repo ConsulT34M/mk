@@ -18,11 +18,13 @@ def main():
         )
         with os.fdopen(os.open(env, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as out:
             out.write("DEMO_ADMIN_PASSWORD=admin\n")
+            out.write("OPENAI_API_KEY=\n")
             for key in keys:
                 out.write(f"{key}={secrets.token_urlsafe(32)}\n")
         print("Created .env with local credentials.")
     sample = ROOT / ".local" / "sample.wav"
     sample.parent.mkdir(exist_ok=True)
+    (sample.parent / "recordings").mkdir(mode=0o700, exist_ok=True)
     if not sample.exists():
         with wave.open(str(sample), "wb") as audio:
             audio.setparams((1, 2, 8000, 0, "NONE", "not compressed"))

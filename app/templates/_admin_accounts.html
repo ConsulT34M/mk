@@ -1,0 +1,19 @@
+{% if editor is not none %}<section class="board-panel admin-panel">
+  <h3>{{ '상담원 수정' if editor else '상담원 추가' }}</h3>
+  <form class="admin-form" method="post" action="{{ url_for('management.save_agent',staff_id=editor.staff_id) if editor else url_for('management.save_agent') }}" data-action="admin" data-return="{{ url_for('management.index',tab='agents',filter=group) }}">
+    <label>상담원 이름<input name="display_name" maxlength="60" value="{{ editor.display_name or '' }}" placeholder="미입력 시 아이디 표시"></label>
+    <label>직원 아이디<input name="login_id" maxlength="80" value="{{ editor.login_id or '' }}" required autocomplete="off"></label>
+    <label>{{ '새 비밀번호 (변경 시)' if editor else '비밀번호' }}<input type="password" name="password" maxlength="512" autocomplete="new-password" {% if not editor %}required{% endif %}></label>
+    {% for key,label in periods %}<label>{{ label }} 목표 (건)<input name="{{ key }}" type="number" min="0" max="99999" value="{{ editor[key] if editor and editor[key] is not none else '' }}" placeholder="미설정"></label>{% endfor %}
+    <button class="admin-primary">저장</button><a class="admin-btn" href="{{ url_for('management.index',tab='agents',filter=group) }}">취소</a>
+  </form>
+  {% if editor %}<form class="account-status" method="post" action="{{ url_for('management.account_status',staff_id=editor.staff_id) }}" data-action="admin" data-return="{{ url_for('management.index',tab='agents') }}" {% if editor.is_active %}data-confirm="이 계정을 삭제할까요? 진행 중인 상담은 대기열로 돌아가고 종결 기록은 보존됩니다."{% endif %}>
+    <input type="hidden" name="status" value="{{ 'inactive' if editor.is_active else 'active' }}"><button class="admin-btn {{ 'danger' if editor.is_active }}">{{ '계정 삭제' if editor.is_active else '계정 복구' }}</button></form>{% endif %}
+</section>{% endif %}
+<section class="board-panel admin-panel"><div class="section-title"><h3>상담원 계정과 할당량</h3>
+  <form class="report-filter" method="get"><input type="hidden" name="tab" value="agents"><select name="filter" aria-label="계정 상태">{% for key,name in [('active','활성 계정'),('inactive','비활성 계정'),('all','전체 계정')] %}<option value="{{ key }}" {% if group==key %}selected{% endif %}>{{ name }}</option>{% endfor %}</select><button class="admin-btn">조회</button></form></div>
+  <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담원 / 직원 아이디</th><th>상태</th>{% for key,label in periods %}<th>{{ label }} 목표</th>{% endfor %}<th>관리</th></tr></thead><tbody>
+    {% for p in people %}<tr><td class="account-name"><strong>{{ p.display_name or p.login_id }}</strong>{% if p.display_name %}<small>{{ p.login_id }}</small>{% endif %}</td><td><span class="state-pill {{ 'enabled' if p.is_active else 'closed' }}">{{ '활성' if p.is_active else '비활성' }}</span></td>
+    {% for key,label in periods %}<td>{{ '미설정' if p[key] is none else p[key]|string ~ '건' }}</td>{% endfor %}<td><a class="admin-btn" href="{{ url_for('management.index',tab='agents',filter=group,edit=p.staff_id) }}">수정</a></td></tr>
+    {% else %}<tr><td colspan="6" class="admin-empty">이 상태의 상담원이 없습니다.</td></tr>{% endfor %}</tbody></table></div>
+  <p class="table-note"><a href="{{ url_for('management.index',tab='quotas') }}">기간별 배정·처리·잔여 현황 →</a></p></section>

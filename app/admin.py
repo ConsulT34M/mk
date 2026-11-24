@@ -8,8 +8,9 @@ from werkzeug.security import generate_password_hash
 
 from .cases import assignment_log, message_info, phone_info, save_phone_response, set_assignee, staff_notes
 from .common import ApiError, admin, case_info, case_row, channel, content_visible, payload, staff_user, text_field, uuid_field
-from .db import admin_change, new_id, one, rows, run, stamp, utcnow
-from .recordings import check_expiry, purge_case_content
+from .db import admin_change, db, new_id, one, rows, run, stamp, utcnow
+from .desk_reports import channel_metrics, dashboard_charts, midnight, notices, report_range, statistics, today
+from .recordings import check_expiry, purge_case_content, stream_recording
 
 management = Blueprint("management", __name__, url_prefix="/admin")
 PERIODS = (("daily", "일간"), ("weekly", "주간"), ("monthly", "월간"))
@@ -30,6 +31,57 @@ def init_admin():
     )
     if column["nullable"] == "NO":
         run("ALTER TABLE assignment_history MODIFY new_agent_id CHAR(36) NULL")
+    column = one("SELECT IS_NULLABLE AS nullable FROM information_schema.columns WHERE table_schema=DATABASE() "
+                 "AND table_name='customer_session' AND column_name='case_id'")
+    if column["nullable"] == "NO":
+        run("ALTER TABLE customer_session MODIFY case_id CHAR(36) NULL")
+    # AI-only calls have neither a ticket nor a staff uploader.
+    if one("SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='recording' "
+           "AND column_name IN ('case_id','uploaded_by') AND is_nullable='NO' LIMIT 1"):
+        run("ALTER TABLE recording MODIFY case_id CHAR(36) NULL, MODIFY uploaded_by CHAR(36) NULL")
+    migrate_recording_labels()
+    migrate_desk()
+
+
+def migrate_desk():
+    """Apply the additive portal migration, including after a partial DDL run."""
+    columns = {(row["tbl"], row["col"]) for row in rows(
+        "SELECT table_name AS tbl,column_name AS col FROM information_schema.columns "
+        "WHERE table_schema=DATABASE() AND table_name IN ('staff_account','support_case')")}
+    for chunk in Path(__file__).with_name("desk_schema.sql").read_text(encoding="utf-8").split(";"):
+        statement = chunk.strip()
+        if not statement:
+            continue
+        if statement.startswith("ALTER TABLE"):
+            tokens = statement.split()
+            if (tokens[2], tokens[5]) in columns:
+                continue
+        run(statement)
+    db().commit()
+
+
+def migrate_recording_labels():
+    if not one("SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() "
+               "AND table_name='recording' AND column_name='label'"):
+        run("ALTER TABLE recording ADD COLUMN label VARCHAR(120)")
+    if not one("SELECT 1 FROM information_schema.tables WHERE table_schema=DATABASE() "
+               "AND table_name='recording_label'"):
+        return
+
+    # Keep the source stable between the copy, byte-for-byte check, and removal.
+    run("LOCK TABLES recording WRITE, recording_label WRITE")
+    try:
+        run("UPDATE recording JOIN recording_label USING (recording_id) "
+            "SET recording.label=recording_label.label WHERE recording.label IS NULL")
+        if one("SELECT 1 FROM recording_label LEFT JOIN recording USING (recording_id) "
+               "WHERE NOT (CAST(recording.label AS BINARY) <=> CAST(recording_label.label AS BINARY)) LIMIT 1"):
+            raise RuntimeError("녹취 표시명이 일치하지 않아 기존 recording_label 테이블을 보존했습니다.")
+        run("DROP TABLE recording_label")
+    except Exception:
+        db().rollback()
+        raise
+    finally:
+        run("UNLOCK TABLES")
 
 
 @management.before_request
@@ -50,7 +102,7 @@ def quota_rows(staff_id=None):
     today = (utcnow() + kst).replace(hour=0, minute=0, second=0, microsecond=0)
     starts = (today - kst, today - timedelta(days=today.weekday()) - kst, today.replace(day=1) - kst)
     people = rows(
-        "SELECT a.staff_id, a.login_id, a.is_active, q.daily, q.weekly, q.monthly FROM staff_account a "
+        "SELECT a.staff_id, a.login_id, a.display_name, a.is_active, q.daily, q.weekly, q.monthly FROM staff_account a "
         "LEFT JOIN agent_quota q ON q.staff_id=a.staff_id WHERE a.role='AGENT' "
         + ("AND a.staff_id=%s " if staff_id else "") + "ORDER BY a.is_active DESC, a.login_id",
         (staff_id,) if staff_id else (),
@@ -73,7 +125,7 @@ def quota_rows(staff_id=None):
 
 def agent_account(staff_id, lock=False):
     person = one(
-        "SELECT staff_id,login_id,is_active FROM staff_account WHERE staff_id=%s AND role='AGENT'"
+        "SELECT staff_id,login_id,display_name,is_active FROM staff_account WHERE staff_id=%s AND role='AGENT'"
         + (" FOR UPDATE" if lock else ""), (staff_id,),
     )
     if not person:
@@ -85,18 +137,46 @@ def agent_account(staff_id, lock=False):
 def index():
     tab = request.args.get("tab", "overview")
     data = {}
-    if tab == "agents":
-        data["people"] = rows("SELECT staff_id,login_id,is_active FROM staff_account WHERE role='AGENT' ORDER BY is_active DESC,login_id")
+    if tab in ("agents", "accounts"):
+        tab = "agents"
+        people = quota_rows()
+        group = request.args.get("filter", "active")
+        data.update(people=[p for p in people if group == "all" or bool(p["is_active"]) == (group != "inactive")], group=group)
         selected = request.args.get("edit")
-        data["editor"] = {} if selected == "new" else agent_account(selected) if selected else None
+        data["editor"] = {} if selected == "new" else next((p for p in people if p["staff_id"] == selected), None)
+        if selected and selected != "new" and not data["editor"]:
+            raise ApiError("AGENT_NOT_FOUND")
+    elif tab == "notices":
+        data.update(notices=notices(), notice_id=new_id())
+    elif tab == "org":
+        teams = rows("SELECT team_id,name FROM staff_team ORDER BY name")
+        members = rows("SELECT staff_id,login_id,display_name,team_id,is_active FROM staff_account WHERE role='AGENT' ORDER BY login_id")
+        selected = request.args.get("team", teams[0]["team_id"] if teams else None)
+        team = next((t for t in teams if t["team_id"] == selected), None)
+        if selected and not team:
+            raise ApiError("INVALID_INPUT")
+        dates = report_range()
+        data.update(teams=teams, members=members, team=team, dates=dates, snapshot={p["staff_id"]:p["team_id"] for p in members},
+                    report=statistics(dates, team_id=selected) if team else None)
+    elif tab == "ai":
+        data["policy"] = one("SELECT * FROM voice_policy WHERE policy_id=1")
+        data["voice_counts"] = one("SELECT COUNT(DISTINCT a.recording_id) AS sessions, COUNT(DISTINCT c.case_id) AS handed "
+                                   "FROM audit_event a LEFT JOIN visible_case c ON c.intake_request_id=a.recording_id "
+                                   "WHERE a.action IN ('VOICE_RECORDING_AGREED','VOICE_RECORDING_REFUSED') AND a.created_at>=%s", (midnight(today()),))
     elif tab == "quotas":
         data["people"] = quota_rows()
         period = request.args.get("period")
         data["period"] = period if period in dict(PERIODS) else "daily"
         selected = request.args.get("edit")
-        data["editor"] = next((p for p in data["people"] if p["staff_id"] == selected), None)
-        if selected and not data["editor"]:
-            raise ApiError("AGENT_NOT_FOUND")
+        if selected:
+            return redirect(url_for("management.index", tab="agents", filter="all", edit=selected))
+    elif tab == "voice-recordings":
+        data["clips"] = rows(
+            "SELECT r.recording_id,r.case_id,r.stored_at,r.expires_at,r.label FROM recording r "
+            "LEFT JOIN support_case c ON c.case_id=r.case_id "
+            "WHERE r.uploaded_by IS NULL AND r.state='READY' AND r.expires_at>UTC_TIMESTAMP(6) AND c.deleted_at IS NULL "
+            "ORDER BY r.stored_at DESC,r.recording_id"
+        )
     elif tab == "audit":
         page = max(1, min(request.args.get("page", 1, type=int), 2**31 - 1))
         changes = rows(
@@ -107,27 +187,41 @@ def index():
         )
         data.update(changes=changes[:40], page=page, more=len(changes) > 40)
     else:
-        tab = "history" if tab == "history" else "overview"
+        tab = tab if tab in ("history", "calls", "chats") else "overview"
         recordings = ""
         if tab == "history":
             recordings = (",(SELECT COUNT(*) FROM recording r WHERE r.case_id=c.case_id) AS recording_count, "
                           "EXISTS(SELECT 1 FROM recording r WHERE r.case_id=c.case_id AND r.expires_at>UTC_TIMESTAMP(6) "
                           "AND r.state NOT IN ('DELETE_PENDING','DESTROYED')) AS editable_recording")
         cases = rows(
-            "SELECT c.case_id,c.channel,c.opened_at,c.closed_at,c.content_expires_at,c.current_agent_id,s.login_id" + recordings +
+            "SELECT c.case_id,c.channel,c.opened_at,c.closed_at,c.content_expires_at,c.current_agent_id,c.inquiry_type,s.login_id,s.display_name" + recordings +
             " FROM visible_case c LEFT JOIN staff_account s ON s.staff_id=c.current_agent_id "
             "ORDER BY c.opened_at DESC,c.case_id"
         )
-        items = [dict(case_info(c), login_id=c["login_id"], recording_count=c.get("recording_count", 0),
+        items = [dict(case_info(c), login_id=c["login_id"], display_name=c["display_name"], recording_count=c.get("recording_count", 0),
                       content_visible=content_visible(c), editable_recording=c.get("editable_recording")) for c in cases]
-        if tab == "overview":
-            selected = request.args.get("status", "ALL")
-            counts = {key: sum(i["status"] == key for i in items) for key in ("QUEUED", "IN_PROGRESS", "CLOSED")}
-            selected = selected if selected in counts else "ALL"
-            data.update(counts=counts, total=len(items), selected=selected)
-            data["team"] = quota_rows()
-            data["in_progress"] = Counter(i["current_agent_id"] for i in items if i["status"] == "IN_PROGRESS")
-            data["items"] = [i for i in items if selected == "ALL" or i["status"] == selected]
+        if tab != "history":
+            kind = request.args.get("channel")
+            if tab == "overview":
+                data.update(dashboard_charts())
+                data["team"] = quota_rows()
+                data["in_progress"] = Counter(i["current_agent_id"] for i in items if i["status"] == "IN_PROGRESS")
+            else:
+                kind = "PHONE" if tab == "calls" else "WEB"
+                data["metrics"] = channel_metrics(kind)
+            scoped = [i for i in items if kind not in ("WEB", "PHONE") or i["channel"] == kind]
+            counts = Counter(i["status"] for i in scoped)
+            status = request.args.get("status", "ALL")
+            if status not in ("QUEUED", "IN_PROGRESS", "CLOSED"):
+                status = "ALL"
+            tickets = [i for i in scoped if status == "ALL" or i["status"] == status]
+            page_size = 6
+            pages = max(1, (len(tickets) + page_size - 1) // page_size)
+            page = max(1, min(request.args.get("page", 1, type=int), pages))
+            start = (page - 1) * page_size
+            query = {key: request.args[key] for key in ("tab", "channel", "status", "unit", "day", "month") if key in request.args}
+            data.update(items=tickets[start:start + page_size], ticket_count=len(tickets), status_filter=status, counts=counts,
+                        channel_count=len(scoped), selected=kind, page=page, pages=pages, page_query=query)
         else:
             selected = request.args.get("channel")
             selected = selected if selected in ("WEB", "PHONE", "RECORDINGS") else "ALL"
@@ -153,11 +247,15 @@ def save_agent(staff_id):
     person = agent_account(staff_id, lock=True) if staff_id else None
     data = payload()
     login = text_field(data.get("login_id"), 80)
+    name = text_field(data["display_name"], 60) if data.get("display_name") else None
     password = data.get("password", "")
     if not isinstance(password, str) or len(password) > 512 or (not person and not password):
         raise ApiError("INVALID_INPUT")
     try:
         if person:
+            if "display_name" in data and person["display_name"] != name:
+                run("UPDATE staff_account SET display_name=%s WHERE staff_id=%s", (name,staff_id))
+                admin_change("상담원 이름 변경", login)
             if login != person["login_id"]:
                 run("UPDATE staff_account SET login_id=%s WHERE staff_id=%s", (login, staff_id))
                 admin_change("상담원 아이디 변경", person["login_id"] + " → " + login)
@@ -168,14 +266,16 @@ def save_agent(staff_id):
         else:
             staff_id = new_id()
             run(
-                "INSERT INTO staff_account (staff_id,login_id,password_hash,role) VALUES (%s,%s,%s,'AGENT')",
-                (staff_id, login, generate_password_hash(password)),
+                "INSERT INTO staff_account (staff_id,login_id,display_name,password_hash,role) VALUES (%s,%s,%s,%s,'AGENT')",
+                (staff_id, login, name, generate_password_hash(password)),
             )
             admin_change("상담원 계정 생성", login)
     except IntegrityError as error:
         if error.args[0] == 1062:
             raise ApiError("LOGIN_ID_TAKEN") from None
         raise
+    if any(key in data for key, _ in PERIODS):
+        write_quota(staff_id, login, data)
     return {"staff_id": staff_id}, 200 if person else 201
 
 
@@ -204,7 +304,11 @@ def account_status(staff_id):
 @management.post("/agents/<uuid:staff_id>/quota")
 def save_quota(staff_id):
     person = agent_account(staff_id, lock=True)
-    data = payload()
+    write_quota(staff_id, person["login_id"], payload())
+    return {"staff_id": staff_id}
+
+
+def write_quota(staff_id, login, data):
     goals = []
     for key, _ in PERIODS:
         if key not in data:
@@ -220,8 +324,73 @@ def save_quota(staff_id):
     if goals != [previous.get(key) for key, _ in PERIODS]:
         run("REPLACE INTO agent_quota (staff_id,daily,weekly,monthly) VALUES (%s,%s,%s,%s)", (staff_id, *goals))
         summary = " / ".join("미설정" if goal is None else str(goal) for goal in goals)
-        admin_change("할당량 변경", f"{person['login_id']} · 일/주/월 {summary}")
-    return {"staff_id": staff_id}
+        admin_change("할당량 변경", f"{login} · 일/주/월 {summary}")
+
+
+@management.post("/notices")
+def publish_notice():
+    data = payload()
+    notice_id = uuid_field(data.get("notice_id"))
+    title, body = text_field(data.get("title"), 100), text_field(data.get("body"), 3000)
+    try:
+        run("INSERT INTO staff_notice (notice_id,author_id,title,body) VALUES (%s,%s,%s,%s)", (notice_id,g.actor,title,body))
+    except IntegrityError as error:
+        if error.args[0] != 1062:
+            raise
+        old = one("SELECT author_id,title,body FROM staff_notice WHERE notice_id=%s", (notice_id,))
+        if old != dict(author_id=g.actor,title=title,body=body):
+            raise ApiError("REQUEST_KEY_CONFLICT") from None
+        return {"notice_id": notice_id}
+    admin_change("공지 게시", title)
+    return {"notice_id": notice_id}, 201
+
+
+@management.post("/teams", defaults={"team_id": None})
+@management.post("/teams/<uuid:team_id>")
+def save_team(team_id):
+    data = payload()
+    name = text_field(data.get("name"), 40)
+    members, previous = data.get("members"), data.get("previous")
+    if not isinstance(members, list) or not isinstance(previous, dict):
+        raise ApiError("INVALID_INPUT")
+    chosen = {uuid_field(value) for value in members}
+    new = team_id is None
+    team_id = team_id or new_id()
+    if not new:
+        team = one("SELECT name FROM staff_team WHERE team_id=%s FOR UPDATE", (team_id,))
+        if not team or team["name"] != data.get("previous_name"):
+            raise ApiError("TEAM_CHANGED")
+    try:
+        if new:
+            run("INSERT INTO staff_team (team_id,name) VALUES (%s,%s)", (team_id,name))
+        else:
+            run("UPDATE staff_team SET name=%s WHERE team_id=%s", (name,team_id))
+    except IntegrityError as error:
+        if error.args[0] == 1062:
+            raise ApiError("TEAM_NAME_TAKEN") from None
+        raise
+    current = {a["staff_id"]: a["team_id"] for a in rows(
+        "SELECT staff_id,team_id FROM staff_account WHERE role='AGENT' ORDER BY staff_id FOR UPDATE")}
+    original = {key for key, value in previous.items() if value == team_id}
+    if not chosen.issubset(current) or {key for key, value in current.items() if value == team_id} != original:
+        raise ApiError("TEAM_CHANGED")
+    for key in sorted(original ^ chosen):
+        if key not in previous or previous[key] != current[key]:
+            raise ApiError("TEAM_CHANGED")
+        run("UPDATE staff_account SET team_id=%s WHERE staff_id=%s", (team_id if key in chosen else None,key))
+    admin_change("팀 생성" if new else "팀 구성 수정", name)
+    return {"team_id": team_id}, 201 if new else 200
+
+
+@management.post("/ai-settings")
+def save_ai_policy():
+    data = payload()
+    enabled, offer, instructions = data.get("enabled"), data.get("offer_handoff"), data.get("instructions")
+    if not isinstance(enabled, bool) or not isinstance(offer, bool) or not isinstance(instructions, str) or len(instructions) > 600:
+        raise ApiError("INVALID_INPUT")
+    run("UPDATE voice_policy SET enabled=%s,offer_handoff=%s,instructions=%s WHERE policy_id=1", (enabled,offer,instructions.strip()))
+    admin_change("AI 응대 설정 변경", "AI 음성 상담")
+    return {"enabled": enabled}
 
 
 @management.get("/cases/<uuid:case_id>")
@@ -236,10 +405,10 @@ def history(case_id):
     else:
         data["phone"] = phone_info(case_id) if visible else None
         data["recordings"] = rows(
-            "SELECT r.recording_id,r.state,r.stored_at,r.expires_at,r.size_bytes,"
+            "SELECT r.recording_id,r.state,r.stored_at,r.expires_at,r.size_bytes,r.uploaded_by IS NULL AS ai,"
             "(r.expires_at>UTC_TIMESTAMP(6) AND r.state NOT IN ('DELETE_PENDING','DESTROYED')) AS editable,"
-            "CASE WHEN r.expires_at>UTC_TIMESTAMP(6) AND r.state NOT IN ('DELETE_PENDING','DESTROYED') THEN l.label END AS label "
-            "FROM recording r LEFT JOIN recording_label l ON l.recording_id=r.recording_id "
+            "CASE WHEN r.expires_at>UTC_TIMESTAMP(6) AND r.state NOT IN ('DELETE_PENDING','DESTROYED') THEN r.label END AS label "
+            "FROM recording r "
             "WHERE r.case_id=%s ORDER BY r.expires_at DESC,r.recording_id", (case_id,),
         )
     return render_template("admin.html", tab="history", user=g.admin_user, detail=case_info(case), assignments=assignment_log(case_id),
@@ -355,12 +524,28 @@ def delete_ticket(case_id):
     return "", 204
 
 
-@management.post("/cases/<uuid:case_id>/recordings/<uuid:recording_id>")
-def edit_recording(case_id, recording_id):
-    channel(case_row(case_id, lock=True), "PHONE")
-    item = one("SELECT state,expires_at FROM recording WHERE case_id=%s AND recording_id=%s FOR UPDATE", (case_id, recording_id))
+@management.get("/voice-recordings/<uuid:recording_id>/audio")
+def play_voice(recording_id):
+    item = one("SELECT * FROM recording WHERE recording_id=%s AND uploaded_by IS NULL FOR UPDATE", (recording_id,))
+    g.audit_target = ("RECORDING_PLAY", item["case_id"] if item else None, recording_id)
     if not item:
         raise ApiError("RECORDING_NOT_FOUND")
+    return stream_recording(item)
+
+
+@management.post("/voice-recordings/<uuid:recording_id>", defaults={"case_id": None})
+@management.post("/cases/<uuid:case_id>/recordings/<uuid:recording_id>")
+def edit_recording(case_id, recording_id):
+    if case_id:
+        channel(case_row(case_id, lock=True), "PHONE")
+        item = one("SELECT state,expires_at,case_id FROM recording WHERE case_id=%s AND recording_id=%s FOR UPDATE",
+                   (case_id, recording_id))
+    else:
+        item = one("SELECT state,expires_at,case_id FROM recording WHERE uploaded_by IS NULL AND recording_id=%s FOR UPDATE",
+                   (recording_id,))
+    if not item:
+        raise ApiError("RECORDING_NOT_FOUND")
+    case_id = item["case_id"]
     data = payload()
     if data.get("operation") == "delete":
         if item["state"] not in ("DELETE_PENDING", "DESTROYED"):
@@ -371,6 +556,6 @@ def edit_recording(case_id, recording_id):
         label = data.get("label")
         if not isinstance(label, str) or len(label) > 120:
             raise ApiError("INVALID_INPUT")
-        run("REPLACE INTO recording_label (recording_id,label) VALUES (%s,%s)", (recording_id, label.strip()))
+        run("UPDATE recording SET label=%s WHERE recording_id=%s", (label.strip(), recording_id))
         admin_change("녹취 표시명 수정", recording_id, case_id)
     return {"recording_id": recording_id}

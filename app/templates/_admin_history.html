@@ -48,20 +48,13 @@
 <section class="board-panel admin-panel" id="recordings">
   <div class="section-title"><h3>통화 녹취</h3><span class="count">{{ recordings|length }}</span></div>
   {% for r in recordings %}
-  {% set recording_url = url_for('management.edit_recording', case_id=detail.case_id, recording_id=r.recording_id) %}
   <article class="managed-recording">
     <div class="section-title"><h4>{{ r.label or '녹취 #' ~ r.recording_id[:8]|upper }}</h4>
       <span class="state-pill {{ 'enabled' if r.state == 'READY' and r.editable else 'closed' }}">{{ {'READY':('저장 완료' if r.editable else '보관 만료'),'PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[r.state] }}</span>
     </div>
     <p class="record-context"><span>등록 {{ time_at(r.stored_at|utcstamp) }}</span><span>만료 {{ time_at(r.expires_at|utcstamp) }}</span>{% if r.size_bytes is not none %}<span>{{ r.size_bytes|filesizeformat }}</span>{% endif %}</p>
-    {% if r.editable %}<div class="admin-actions recording-actions">
-      <form method="post" action="{{ recording_url }}" class="admin-form" data-action="admin">
-        <label>표시명<input name="label" maxlength="120" value="{{ r.label or '' }}"></label><button type="submit" class="admin-btn">저장</button>
-      </form>
-      <form method="post" action="{{ recording_url }}" data-action="admin" data-confirm="녹취를 삭제할까요? 즉시 재생이 차단되고 원본이 파기됩니다." data-done="녹취 파기를 요청했습니다.">
-        <input type="hidden" name="operation" value="delete"><button type="submit" class="admin-btn danger">녹취 삭제</button>
-      </form>
-    </div>{% endif %}
+    {% if r.ai and r.state == 'READY' and r.editable %}<audio controls preload="none" aria-label="AI 상담 녹취" src="{{ url_for('management.play_voice', recording_id=r.recording_id) }}"></audio>{% endif %}
+    {% if r.editable %}{{ recording_actions(r, url_for('management.edit_recording', case_id=detail.case_id, recording_id=r.recording_id)) }}{% endif %}
   </article>{% else %}<p class="admin-empty">등록된 녹취가 없습니다.</p>{% endfor %}
 </section>
 {% endif %}

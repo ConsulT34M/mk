@@ -1,0 +1,28 @@
+{% from "_desk_reports.html" import stats %}
+{% if tab=='notices' %}
+<section class="board-panel admin-panel"><details><summary class="admin-primary">공지 작성</summary>
+  <form class="admin-stack editor-block" method="post" data-action="admin" action="{{ url_for('management.publish_notice') }}" data-done="공지사항을 게시했습니다.">
+    <input type="hidden" name="notice_id" value="{{ notice_id }}"><label>제목<input name="title" maxlength="100" required></label><label>내용<textarea name="body" maxlength="3000" rows="5" required></textarea></label><button class="admin-primary">게시</button>
+  </form></details></section><section class="board-panel admin-panel"><h3>게시한 공지</h3>{% include '_notices.html' %}</section>
+{% elif tab=='org' %}
+{% macro team_form(edit) %}<form class="admin-stack editor-block" method="post" data-action="admin" data-team-form action="{{ url_for('management.save_team',team_id=team.team_id) if edit else url_for('management.save_team') }}">
+  <input type="hidden" name="previous" value="{{ snapshot|tojson|forceescape }}"><input type="hidden" name="previous_name" value="{{ team.name if edit else '' }}">
+  <label>팀 이름<input name="name" maxlength="40" value="{{ team.name if edit else '' }}" required></label>
+  <fieldset class="member-picker"><legend>소속 상담원</legend><small>선택한 상담원은 이 팀으로 이동합니다.</small>
+    {% for p in members %}<label><input type="checkbox" name="members" value="{{ p.staff_id }}" {% if edit and p.team_id==team.team_id %}checked{% endif %}>
+    {{ p.display_name or p.login_id }}{% if p.display_name %} ({{ p.login_id }}){% endif %} · {{ (teams|selectattr('team_id','equalto',p.team_id)|map(attribute='name')|first) or '미배정' }}{{ ' · 비활성' if not p.is_active }}</label>{% endfor %}</fieldset>
+  <button class="admin-primary">저장</button></form>{% endmacro %}
+<section class="board-panel admin-panel"><div class="section-title"><h3>팀 구성</h3></div>
+  <details><summary class="admin-primary">팀 만들기</summary>{{ team_form(false) }}</details>
+  {% if team %}<div class="org-layout"><nav aria-label="팀 선택">{% for t in teams %}<a class="admin-btn" href="{{ url_for('management.index',tab='org',team=t.team_id,start=dates.start,end=dates.end,by=report.by) }}" {% if t.team_id==team.team_id %}aria-current="page"{% endif %}>{{ t.name }} · {{ members|selectattr('team_id','equalto',t.team_id)|list|length }}명</a>{% endfor %}</nav>
+    <div><h3>{{ team.name }}</h3><ul class="org-members">{% for p in members if p.team_id==team.team_id %}<li>{{ p.display_name or p.login_id }}{% if p.display_name %} · {{ p.login_id }}{% endif %}{{ ' · 비활성' if not p.is_active }}</li>{% else %}<li>배정된 상담원이 없습니다.</li>{% endfor %}</ul><details><summary class="admin-btn">팀 수정</summary>{{ team_form(true) }}</details></div></div>
+  {% else %}<p class="table-note">팀을 만든 뒤 상담원을 배정할 수 있습니다.</p>{% endif %}</section>
+{% if team %}<section class="board-panel admin-panel"><h3>팀 처리 통계</h3>{{ stats(report,dates,tab,team.team_id,scope_label=team.name ~ ' · 현재 소속 기준') }}</section>{% endif %}
+{% else %}
+<section class="board-panel admin-panel"><h3>AI 음성 상담 설정</h3>
+  <form class="admin-stack" method="post" data-action="admin" data-ai-policy action="{{ url_for('management.save_ai_policy') }}">
+    <label class="inline-check"><input type="checkbox" name="enabled" {% if policy.enabled %}checked{% endif %}>AI 음성 상담 사용</label>
+    <label>추가 응대 지침<textarea name="instructions" rows="4" maxlength="600">{{ policy.instructions }}</textarea></label>
+    <label class="inline-check"><input type="checkbox" name="offer_handoff" {% if policy.offer_handoff %}checked{% endif %}>해결이 어려운 문의에는 상담원 연결 제안</label><button class="admin-primary">설정 저장</button></form></section>
+{% if policy.enabled %}<section class="board-panel admin-panel"><h3>오늘 시작한 AI 음성 상담</h3><p>시작 {{ voice_counts.sessions }}건 · 이 중 상담원 인계 {{ voice_counts.handed }}건</p></section>{% endif %}
+{% endif %}

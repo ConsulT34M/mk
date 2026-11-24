@@ -3,12 +3,14 @@ import io
 import os
 import struct
 import wave
-from pathlib import Path
+from datetime import timedelta
 
-from flask import Blueprint, current_app, g, request, send_file
+from flask import Blueprint, current_app, g, request
 
 from .common import ApiError, assigned_case, channel, deadline, uuid_field, writable
 from .db import audit, db, new_id, one, rows, run, stamp, utcnow
+from . import recording_store
+from .voice_recording import finalize_voice, remove_partial
 
 recordings = Blueprint("recordings", __name__)
 
@@ -19,6 +21,7 @@ def recording_info(item):
         "expires_at": stamp(item["expires_at"]),
         "playable": item["state"] == "READY" and item["expires_at"] > utcnow(),
         "label": item.get("label") if item["expires_at"] > utcnow() and item["state"] not in ("DELETE_PENDING", "DESTROYED") else None,
+        "ai": item["uploaded_by"] is None,
     }
 
 
@@ -39,10 +42,6 @@ def read_wav():
     except (EOFError, ValueError, wave.Error, struct.error):
         raise ApiError("WAV_FORMAT_UNSUPPORTED") from None
     return data
-
-
-def recording_path(item):
-    return Path(current_app.config["RECORDING_DIR"]) / item["object_key"]
 
 
 def can_upload(case):
@@ -79,7 +78,7 @@ def upload_recording(case_id):
         run(
             "INSERT INTO recording (recording_id, case_id, upload_request_id, uploaded_by, state, object_key, "
             "size_bytes, sha256, expires_at) VALUES (%s,%s,%s,%s,'PENDING',%s,%s,%s,%s)",
-            (recording_id, case_id, request_id, g.actor, recording_id + ".wav", len(data), checksum,
+            (recording_id, case_id, request_id, g.actor, recording_store.object_key(recording_id), len(data), checksum,
              deadline("RECORDING_RETENTION_MINUTES", 5)),
         )
     # A crash during I/O leaves a durable, non-playable reservation for retry or cleanup.
@@ -89,10 +88,7 @@ def upload_recording(case_id):
     check_expiry(item)
     if item["state"] != "READY":
         try:
-            with recording_path(item).open("wb") as output:
-                output.write(data)
-                output.flush()
-                os.fsync(output.fileno())
+            recording_store.put_audio(item["object_key"], io.BytesIO(data))
         except OSError:
             run("UPDATE recording SET state='FAILED' WHERE recording_id=%s", (recording_id,))
             db().commit()
@@ -113,13 +109,17 @@ def play(case_id, recording_id):
     item = one("SELECT * FROM recording WHERE recording_id=%s AND case_id=%s FOR UPDATE", (recording_id, case_id))
     if not item:
         raise ApiError("RECORDING_NOT_FOUND")
+    return stream_recording(item)
+
+
+def stream_recording(item):
     check_expiry(item)
     if item["state"] != "READY":
         raise ApiError("RECORDING_NOT_READY")
     try:
-        return send_file(recording_path(item), mimetype="audio/wav", download_name="recording.wav", etag=False)
+        return recording_store.send_audio(item["object_key"])
     except OSError:
-        run("UPDATE recording SET state='FAILED' WHERE recording_id=%s", (recording_id,))
+        run("UPDATE recording SET state='FAILED' WHERE recording_id=%s", (item["recording_id"],))
         db().commit()
         raise ApiError("RECORDING_STORE_FAILED") from None
 
@@ -139,18 +139,29 @@ def purge():
     for row in due:
         rid = row["recording_id"]
         item = one("SELECT * FROM recording WHERE recording_id=%s FOR UPDATE", (rid,))
+        if item["uploaded_by"] is None and item["state"] == "PENDING" and item["expires_at"] <= utcnow() and item["size_bytes"]:
+            # A closed browser may not send the final request. Keep its acknowledged audio.
+            try:
+                finalize_voice(item)
+            except OSError:
+                audit("RECORDING_STORE", "retention", item["case_id"], rid, "RETRY")
+                if utcnow() - item["expires_at"] >= timedelta(minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5))):
+                    run("UPDATE recording SET state='DELETE_PENDING' WHERE recording_id=%s", (rid,))
+            db().commit()
+            continue
         if item["state"] != "DESTROYED" and (item["state"] == "DELETE_PENDING" or item["expires_at"] <= utcnow()):
             try:
-                recording_path(item).unlink(missing_ok=True)
+                if item["uploaded_by"] is None:
+                    remove_partial(rid)
+                recording_store.delete_audio(item["object_key"])
             except OSError:
                 run("UPDATE recording SET state='DELETE_PENDING' WHERE recording_id=%s", (rid,))
                 audit("RECORDING_PURGE", "retention", item["case_id"], rid, "RETRY")
             else:
                 run(
-                    "UPDATE recording SET state='DESTROYED', object_key=NULL, size_bytes=NULL, sha256=NULL, "
+                    "UPDATE recording SET state='DESTROYED', object_key=NULL, size_bytes=NULL, sha256=NULL, label=NULL, "
                     "destroyed_at=UTC_TIMESTAMP(6) WHERE recording_id=%s", (rid,),
                 )
-                run("DELETE FROM recording_label WHERE recording_id=%s", (rid,))
                 audit("RECORDING_PURGE", "retention", item["case_id"], rid)
         db().commit()
 

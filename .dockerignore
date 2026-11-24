@@ -2,6 +2,8 @@
 .env*
 .local
 design/
+app/static/prototype/index.html
+app/static/prototype/desk.js
 .venv
 **/__pycache__
 **/*.wav

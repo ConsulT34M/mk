@@ -6,11 +6,12 @@ from datetime import datetime, timezone
 from flask import Blueprint, g, redirect, request, url_for
 
 from .common import (
-    CHAT_COOKIE, ApiError, admin, agent, assigned_case, case_info, case_row, channel,
+    CHAT_COOKIE, INQUIRY_COOKIE, ApiError, admin, agent, assigned_case, case_info, case_row, channel,
     content_visible, customer_session, deadline, digest, payload, staff_user, status,
     text_field, uuid_field, writable,
 )
 from .db import admin_change, new_id, one, rows, run, stamp, utcnow
+from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS
 from .recordings import recording_info
 
 cases = Blueprint("cases", __name__)
@@ -48,11 +49,18 @@ def exchange_cases():
     subject = uuid_field(data.get("support_subject_ref"))
     intake = uuid_field(data["intake_request_id"])
     kind = intake_channel(data.get("channel", "WEB"))
+    case_id, created = intake_case(subject, intake, kind, data.get("inquiry_type"))
+    return {"case_id": case_id}, 201 if created else 200
+
+
+def intake_case(subject, intake, kind, inquiry_type=None):
+    if inquiry_type is not None and (not isinstance(inquiry_type, str) or inquiry_type not in TOPICS):
+        raise ApiError("INVALID_INPUT")
     candidate = new_id()
     run(
-        "INSERT INTO support_case (case_id, channel, support_subject_ref, intake_request_id) "
-        "VALUES (%s,%s,%s,%s) ON DUPLICATE KEY UPDATE case_id=case_id",
-        (candidate, kind, subject, intake),
+        "INSERT INTO support_case (case_id, channel, support_subject_ref, intake_request_id,inquiry_type) "
+        "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE case_id=case_id",
+        (candidate, kind, subject, intake, inquiry_type),
     )
     case = one("SELECT case_id,channel,support_subject_ref,deleted_at FROM support_case WHERE intake_request_id=%s", (intake,))
     if case["deleted_at"]:
@@ -62,7 +70,7 @@ def exchange_cases():
     created = case["case_id"] == candidate
     if created and kind == "PHONE":
         run("INSERT INTO phone_response (case_id) VALUES (%s)", (candidate,))
-    return {"case_id": case["case_id"]}, 201 if created else 200
+    return case["case_id"], created
 
 
 @cases.post("/cases/<uuid:case_id>/entry-codes")
@@ -98,10 +106,12 @@ def agents():
 
 def waiting_tickets():
     items = rows(
-        "SELECT case_id, channel, opened_at FROM visible_case "
-        "WHERE current_agent_id IS NULL AND closed_at IS NULL ORDER BY opened_at, case_id"
+        "SELECT c.case_id,c.channel,c.inquiry_type,c.opened_at, COALESCE((SELECT MAX(a.changed_at) FROM assignment_history a "
+        "WHERE a.case_id=c.case_id AND a.new_agent_id IS NULL),c.opened_at) AS queued_at FROM visible_case c "
+        "WHERE c.current_agent_id IS NULL AND c.closed_at IS NULL ORDER BY queued_at,c.case_id"
     )
     for item in items:
+        item["wait_seconds"] = int((utcnow() - item.pop("queued_at")).total_seconds())
         item["opened_at"] = stamp(item["opened_at"])
     return items
 
@@ -174,7 +184,8 @@ def set_assignee(case, new_agent, changed_by):
 
 def phone_info(case_id):
     phone = one(
-        "SELECT call_at, consent_state, inquiry, guidance, followup_required FROM phone_response WHERE case_id=%s",
+        "SELECT p.call_at,p.consent_state,p.inquiry,p.guidance,p.followup_required,c.call_direction,c.talk_seconds "
+        "FROM phone_response p JOIN support_case c USING(case_id) WHERE p.case_id=%s",
         (case_id,),
     )
     if phone:
@@ -217,8 +228,7 @@ def case_detail(case_id):
     g.audit_target = ("CASE_VIEW", case_id, None)
     case = assigned_case(case_id)
     visible = content_visible(case)
-    recs = rows("SELECT r.*,l.label FROM recording r LEFT JOIN recording_label l ON l.recording_id=r.recording_id "
-                "WHERE r.case_id=%s ORDER BY r.expires_at DESC", (case_id,))
+    recs = rows("SELECT * FROM recording WHERE case_id=%s ORDER BY expires_at DESC", (case_id,))
     return {
         "case": case_info(case), "result_note": case["result_note"] if visible else None,
         "customer_ref": case["support_subject_ref"] if visible else None, "content_expired": not visible,
@@ -237,7 +247,29 @@ def update_phone(case_id):
     return save_phone_response(case_id, payload())
 
 
+@cases.post("/staff/cases/<uuid:case_id>/category")
+def categorize(case_id):
+    case = assigned_case(case_id, lock=True)
+    writable(case)
+    category = payload().get("inquiry_type")
+    if not isinstance(category, str) or category not in TOPICS:
+        raise ApiError("INVALID_INPUT")
+    run("UPDATE support_case SET inquiry_type=%s WHERE case_id=%s", (category,case_id))
+    return {"inquiry_type": category}
+
+
 def save_phone_response(case_id, data, allow_clear=False):
+    metrics = {}
+    if "call_direction" in data:
+        value = data["call_direction"]
+        if not isinstance(value, str) or value not in DIRECTIONS:
+            raise ApiError("INVALID_INPUT")
+        metrics["call_direction"] = value
+    if "talk_seconds" in data:
+        value = str(data["talk_seconds"])
+        if not value.isascii() or not value.isdecimal() or len(value) > 6 or int(value) > 86400:
+            raise ApiError("INVALID_INPUT")
+        metrics["talk_seconds"] = int(value)
     edits = {}
     if allow_clear:
         edits = {key: None for key, value in data.items() if value is None}
@@ -270,10 +302,12 @@ def save_phone_response(case_id, data, allow_clear=False):
             edits.update(consent_by=g.actor, consent_at=utcnow())
         if consent == "REFUSED":
             run("UPDATE recording SET state='DELETE_PENDING' WHERE case_id=%s AND state IN ('READY','FAILED','PENDING')", (case_id,))
-    if not edits:
+    if not edits and not metrics:
         raise ApiError("INVALID_INPUT")
-    columns = ", ".join(f"{key}=%s" for key in edits)
-    run(f"UPDATE phone_response SET {columns} WHERE case_id=%s", (*edits.values(), case_id))
+    for table, values in (("phone_response", edits), ("support_case", metrics)):
+        if values:
+            columns = ", ".join(f"{key}=%s" for key in values)
+            run(f"UPDATE {table} SET {columns} WHERE case_id=%s", (*values.values(), case_id))
     return phone_info(case_id)
 
 
@@ -281,27 +315,34 @@ def save_phone_response(case_id, data, allow_clear=False):
 def close_case(case_id):
     case = assigned_case(case_id, lock=True)
     writable(case)
-    note = text_field(payload().get("result_note"))
+    data = payload()
+    note = text_field(data.get("result_note"))
+    outcome = data.get("outcome")
+    if outcome is not None and (not isinstance(outcome, str) or outcome not in OUTCOMES):
+        raise ApiError("INVALID_INPUT")
     if case["channel"] == "PHONE":
         phone = phone_info(case_id)
         if (not phone["call_at"] or not phone["inquiry"] or not phone["guidance"]
                 or phone["followup_required"] is None or phone["consent_state"] == "UNASKED"):
             raise ApiError("PHONE_RESPONSE_INCOMPLETE")
+        if outcome is None:
+            outcome = "FOLLOWUP" if phone["followup_required"] else "RESOLVED"
     case["closed_at"] = utcnow()
     run(
-        "UPDATE support_case SET closed_at=%s, result_note=%s, content_expires_at=%s WHERE case_id=%s",
-        (case["closed_at"], note, deadline("CASE_RETENTION_MINUTES", 5), case_id),
+        "UPDATE support_case SET closed_at=%s,result_note=%s,outcome=%s,content_expires_at=%s WHERE case_id=%s",
+        (case["closed_at"], note, outcome, deadline("CASE_RETENTION_MINUTES", 5), case_id),
     )
+    case["outcome"] = outcome
     return case_info(case)
 
 
 def chat_access(case_id, lock):
     actor = request.headers.get("X-Chat-Actor")
-    if actor not in (None, "customer", "staff"):
+    if actor not in (None, "customer", "inquiry", "staff"):
         raise ApiError("INVALID_INPUT")
-    if actor == "customer" or (actor is None and request.cookies.get(CHAT_COOKIE)):
-        session = customer_session()
-        if not session:
+    if actor in ("customer", "inquiry") or (actor is None and request.cookies.get(CHAT_COOKIE)):
+        session = customer_session(INQUIRY_COOKIE if actor == "inquiry" else CHAT_COOKIE)
+        if not session or not session["case_id"]:
             raise ApiError("CHAT_SESSION_REQUIRED")
         if session["case_id"] != case_id:
             raise ApiError("CASE_ACCESS_DENIED")
@@ -328,7 +369,7 @@ def messages(case_id):
         history = []
         if content_visible(case):
             history = rows("SELECT * FROM chat_message WHERE case_id=%s AND body<>'' ORDER BY message_id", (case_id,))
-        return {"items": [message_info(row) for row in history], "read_only": bool(case["closed_at"])}
+        return {"items": [message_info(row) for row in history], "read_only": bool(case["closed_at"]), "status": status(case)}
     data = payload()
     message_key = uuid_field(data.get("client_message_id"))
     body = text_field(data.get("body"))

@@ -9,6 +9,6 @@
     <label>입장 코드<input name="entry_code" autocomplete="off" spellcheck="false" maxlength="256" required autofocus></label>
     <button class="primary" type="submit">상담방 입장</button>
   </form>
-  <div class="entry-footer"><a href="/">직원 로그인으로 이동</a></div>
+  <div class="entry-footer"><a href="{{ url_for('inquiry_page') }}">직접 문의하기</a><a href="/">직원 로그인으로 이동</a></div>
 </section></div>
 {% endblock %}

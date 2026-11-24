@@ -1,0 +1,2 @@
+{% for n in notices %}<details class="published-notice"><summary><strong>{{ n.title }}</strong><time datetime="{{ n.published_at|utcstamp }}">{{ n.published_at.strftime('%Y-%m-%d') }}</time></summary>
+<small>{{ n.author }}</small><p>{{ n.body }}</p></details>{% else %}<p class="admin-empty">게시된 공지가 없습니다.</p>{% endfor %}

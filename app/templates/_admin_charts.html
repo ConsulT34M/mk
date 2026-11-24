@@ -1,0 +1,17 @@
+{% from "_desk_reports.html" import pie %}
+<div class="board-metrics ops-charts">
+  <section class="board-panel"><div class="section-title"><h3>문의 유형</h3><nav class="switches" aria-label="조회 단위">
+    {% for key,label in [('day','일별'),('month','월별')] %}<a href="{{ url_for('management.index', unit=key, day=day, month=month, status=status_filter, channel=request.args.get('channel')) }}" {% if unit==key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav></div>
+    <form class="report-filter" method="get"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="status" value="{{ status_filter }}"><input type="hidden" name="channel" value="{{ request.args.get('channel', '') }}">
+    <input aria-label="문의 유형 조회 기간" type="{{ 'month' if unit=='month' else 'date' }}" name="{{ unit }}" value="{{ month if unit=='month' else day }}" max="{{ today.isoformat()[:7] if unit=='month' else today }}" required>
+    <button class="admin-btn">조회</button><span class="count">총 {{ topics.total }}건</span></form>{{ pie(topics) }}</section>
+  <section class="board-panel"><div class="section-title"><h3>시간대별 접수</h3><span class="count">오늘 {{ arrivals }}건</span></div>
+    <p class="bar-key"><span>웹채팅</span><span>통화</span> · 한국 시간</p>
+    <svg class="hour-chart" viewBox="0 0 480 148" role="img" aria-label="오늘 시간대별 웹채팅과 통화 접수, 총 {{ arrivals }}건">
+      {% for h in [19,49,79,109] %}<line x1="2" x2="478" y1="{{ h }}" y2="{{ h }}" stroke="#e6e5ed"/>{% endfor %}
+      {% for s in slots %}{% set bar=loop.index0*20+4 %}{% set a=s.web*81/peak %}{% set b=s.phone*81/peak %}
+      <g><title>{{ loop.index0 }}시 · 웹채팅 {{ s.web }}건, 통화 {{ s.phone }}건</title><rect x="{{ bar }}" y="{{ 109-b }}" width="12" height="{{ b }}" fill="#dbb559"/><rect x="{{ bar }}" y="{{ 109-a-b }}" width="12" height="{{ a }}" fill="#6459b4"/>
+      {% if a+b %}<text x="{{ bar+6 }}" y="{{ 105-a-b }}" text-anchor="middle" font-size="12">{{ s.web+s.phone }}</text>{% endif %}
+      {% if loop.index0%3==0 %}<text x="{{ bar+6 }}" y="129" text-anchor="middle" font-size="11">{{ loop.index0 }}시</text>{% endif %}</g>{% endfor %}
+    </svg></section>
+</div>

@@ -1,24 +1,34 @@
 {% extends "base.html" %}
-{% set sections = [('overview','대시보드','dashboard-icon'),('agents','상담원 계정','person-icon'),('quotas','상담 할당량','quota-icon'),('history','상담 기록','chat-icon'),('audit','변경 이력','archive-icon')] %}
-{% set titles = dict(overview='관리자 대시보드', agents='상담원 계정', quotas='상담 할당량', history='상담 기록', audit='변경 이력') %}
+{% set sections = [('상담 운영',[('overview','대시보드','dashboard-icon'),('calls','통화','phone-icon'),('chats','채팅','chat-icon')]),('관리',[('agents','계정 관리','person-icon'),('org','조직','person-icon'),('notices','공지사항','archive-icon'),('ai','AI 설정','quota-icon'),('audit','변경 이력','archive-icon')])] %}
+{% set titles = {'overview':'관리자 대시보드','agents':'계정 관리','quotas':'상담 할당량','org':'조직','notices':'공지사항','ai':'AI 설정','calls':'통화','chats':'채팅','history':'상담 기록','voice-recordings':'AI 상담 녹취','audit':'변경 이력'} %}
 {% set states = dict(QUEUED='배정 대기', IN_PROGRESS='진행 중', CLOSED='종결') %}
 {% macro state(value) %}<span class="state-pill {{ value|lower }}">{{ states[value] }}</span>{% endmacro %}
 {% macro time_at(iso) %}{% if iso %}<time datetime="{{ iso }}">{{ iso[:16]|replace('T',' ') }}</time>{% else %}—{% endif %}{% endmacro %}
+{% macro recording_actions(r, action, compact=false) %}
+<div class="admin-actions{% if not compact %} recording-actions{% endif %}">
+  {% if compact %}<details><summary class="admin-btn">표시명 수정</summary>{% endif %}
+  <form method="post" action="{{ action }}" class="admin-form" data-action="admin">
+    <label>표시명<input name="label" maxlength="120" value="{{ r.label or '' }}"></label><button type="submit" class="admin-btn">저장</button>
+  </form>
+  {% if compact %}</details>{% endif %}
+  <form method="post" action="{{ action }}" data-action="admin" data-confirm="녹취를 삭제할까요? 즉시 재생이 차단되고 원본이 파기됩니다." data-done="녹취 파기를 요청했습니다.">
+    <input type="hidden" name="operation" value="delete"><button type="submit" class="admin-btn danger">{{ '삭제' if compact else '녹취 삭제' }}</button>
+  </form>
+</div>
+{% endmacro %}
 {% block title %}{{ titles[tab] }} · 관리자 데스크{% endblock %}
 {% block styles %}
   <link rel="stylesheet" href="{{ url_for('static', filename='prototype/desk.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='agent.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='desk-operations.css') }}">
 {% endblock %}
 {% block layout %}
 <div class="desk admin-desk">
   <aside class="rail" aria-label="관리자 메뉴">
     <img class="rail-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">
     <nav aria-label="관리자 메뉴">
-      {% for key, label, icon in sections %}
-      <a class="nav-item" href="{{ url_for('management.index') if key == 'overview' else url_for('management.index', tab=key) }}" {% if tab == key %}aria-current="page"{% endif %} title="{{ label }}">
-        <i class="icon {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
-      </a>{% endfor %}
+      {% for group, links in sections %}<p class="rail-group">{{ group }}</p>{% for key,label,icon in links %}
+      <a class="nav-item" href="{{ url_for('management.index',tab=key) }}" {% if tab == key or (tab == 'quotas' and key == 'agents') %}aria-current="page"{% endif %} title="{{ label }}"><i class="icon {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span></a>{% endfor %}{% endfor %}
     </nav>
     <div class="profile"><span class="agent-avatar">{{ user.login_id[:2]|upper }}</span><div><strong>{{ user.login_id }}</strong><small>관리자</small></div></div>
   </aside>
@@ -37,44 +47,36 @@
         {% include "_admin_history.html" %}
       {% elif tab == 'overview' %}
         <div id="admin-dashboard">{% include "queue.html" %}</div>
-      {% elif tab == 'history' %}
-        {% include "_admin_notes.html" %}
+      {% elif tab in ('history','calls','chats') %}
+        {% if metrics %}<div class="channel-kpis">{% for title,value in [('오늘 처리 완료',metrics.completed|string ~ '건'),('현재 대기',metrics.waiting|string ~ '건'),('최장 대기 시간',metrics.longest),('평균 응답 시간',metrics.asa)] %}
+        <div class="board-panel"><small>{{ title }}</small><strong>{{ value }}</strong></div>{% endfor %}</div>
+        <div class="channel-links"><a href="{{ url_for('management.index',tab='history',channel=selected) }}">상담 기록 관리</a>{% if tab=='calls' %}<a href="{{ url_for('management.index',tab='voice-recordings') }}">AI 상담 녹취</a>{% endif %}</div>{% endif %}
+        {% if tab=='history' %}{% include "_admin_notes.html" %}{% endif %}
         {% include "queue.html" %}
-      {% elif tab == 'agents' %}
-        {% if editor is not none %}
+      {% elif tab in ('org','notices','ai') %}
+        {% include "_admin_operations.html" %}
+      {% elif tab == 'voice-recordings' %}
         <section class="board-panel admin-panel">
-          <h3>{{ '계정 수정' if editor else '새 상담원' }}</h3>
-          <form class="admin-form" method="post" action="{{ url_for('management.save_agent', staff_id=editor.staff_id) if editor else url_for('management.save_agent') }}" data-action="admin" data-return="{{ url_for('management.index', tab=tab) }}">
-            <label>직원 아이디<input name="login_id" value="{{ editor.login_id or '' }}" maxlength="80" required autocomplete="off"></label>
-            <label>{{ '새 비밀번호 (변경 시 입력)' if editor else '비밀번호' }}<input type="password" name="password" maxlength="512" autocomplete="new-password" {% if not editor %}required{% endif %}></label>
-            <div class="admin-actions"><button type="submit" class="admin-primary">저장</button><a class="admin-btn" href="{{ url_for('management.index', tab=tab) }}">취소</a></div>
-          </form>
-        </section>
-        {% endif %}
-        <section class="board-panel admin-panel"><div class="section-title"><h3>상담원 목록</h3><span class="count">{{ people|length }}</span></div>
-          <div class="table-scroll"><table class="admin-table"><thead><tr><th>직원 아이디</th><th>계정 상태</th><th>계정 관리</th></tr></thead><tbody>
-          {% for p in people %}<tr><td class="identity-cell">{{ p.login_id }}</td><td><span class="state-pill {{ 'enabled' if p.is_active else 'closed' }}">{{ '활성' if p.is_active else '비활성' }}</span></td>
-            <td><div class="admin-actions">
-              <a class="admin-btn" href="{{ url_for('management.index', tab=tab, edit=p.staff_id) }}">수정</a>
-              <form method="post" action="{{ url_for('management.account_status', staff_id=p.staff_id) }}" data-action="admin" {% if p.is_active %}data-confirm="{{ p.login_id }} 계정을 삭제할까요? 계정은 비활성화되고 진행 중인 상담은 대기열로 돌아갑니다. 과거 상담 이력은 보존됩니다."{% endif %}>
-                <input type="hidden" name="status" value="{{ 'inactive' if p.is_active else 'active' }}"><button type="submit" class="admin-btn {{ 'danger' if p.is_active }}">{{ '계정 삭제' if p.is_active else '재활성화' }}</button>
-              </form>
-            </div></td></tr>{% else %}<tr><td colspan="3" class="admin-empty">등록된 상담원이 없습니다.</td></tr>{% endfor %}
+          <div class="table-scroll"><table class="admin-table"><thead><tr><th>저장 일시</th><th>상담 티켓</th><th>녹취 재생</th><th>보관 기한</th><th>관리</th></tr></thead><tbody>
+            {% for r in clips %}<tr>
+              <td>{{ time_at(r.stored_at|utcstamp) }}</td>
+              <td>{% if r.case_id %}<a class="case-ref" href="{{ url_for('management.history', case_id=r.case_id, _anchor='recordings') }}">#{{ r.case_id[:8]|upper }}</a>{% else %}AI 상담으로 종료{% endif %}</td>
+              <td>{% if r.label %}<div>{{ r.label }}</div>{% endif %}<audio controls preload="none" aria-label="AI 상담 녹취 {{ r.recording_id[:8] }}" src="{{ url_for('management.play_voice', recording_id=r.recording_id) }}"></audio></td>
+              <td>{{ time_at(r.expires_at|utcstamp) }}</td>
+              <td>{{ recording_actions(r, url_for('management.edit_recording', recording_id=r.recording_id), compact=true) }}</td>
+            </tr>{% else %}<tr><td class="admin-empty" colspan="5">재생할 AI 상담 녹취가 없습니다.</td></tr>{% endfor %}
           </tbody></table></div>
         </section>
+      {% elif tab == 'agents' %}
+        {% include "_admin_accounts.html" %}
       {% elif tab == 'quotas' %}
-        {% if editor %}<section class="board-panel admin-panel"><h3>{{ editor.login_id }} 할당량 설정</h3>
-          <form class="admin-form" method="post" action="{{ url_for('management.save_quota', staff_id=editor.staff_id) }}" data-action="admin" data-return="{{ url_for('management.index', tab=tab, period=period) }}">
-            {% for key, label in periods %}<label>{{ label }} 목표 (건)<input type="number" name="{{ key }}" min="0" max="99999" placeholder="미설정" value="{{ editor[key] if editor[key] is not none else '' }}"></label>{% endfor %}
-            <div class="admin-actions"><button type="submit" class="admin-primary">저장</button><a class="admin-btn" href="{{ url_for('management.index', tab=tab, period=period) }}">취소</a></div>
-          </form></section>{% endif %}
         <section class="board-panel admin-panel">
           <div class="section-title"><h3>상담원별 처리 현황</h3>
             <nav class="switches" aria-label="집계 기간">{% for key, label in periods %}<a {% if key == period %}aria-current="page"{% endif %} href="{{ url_for('management.index', tab=tab, period=key) }}">{{ label }}</a>{% endfor %}</nav>
           </div>
           <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담원</th><th>목표</th><th>배정</th><th>처리</th><th>잔여</th><th>관리</th></tr></thead><tbody>
             {% for p in people %}{% set goal=p[period] %}{% set done=p.completed[period] %}
-            <tr><td class="identity-cell">{{ p.login_id }}{% if not p.is_active %} <small>비활성</small>{% endif %}</td><td>{{ '미설정' if goal is none else goal ~ '건' }}</td><td>{{ p.assigned[period] }}건</td><td>{{ done }}건</td><td>{{ '—' if goal is none else ([goal - done, 0]|max) ~ '건' }}</td><td><a class="admin-btn" href="{{ url_for('management.index', tab=tab, period=period, edit=p.staff_id) }}">목표 설정</a></td></tr>
+            <tr><td class="identity-cell">{{ p.login_id }}{% if not p.is_active %} <small>비활성</small>{% endif %}</td><td>{{ '미설정' if goal is none else goal ~ '건' }}</td><td>{{ p.assigned[period] }}건</td><td>{{ done }}건</td><td>{{ '—' if goal is none else ([goal - done, 0]|max) ~ '건' }}</td><td><a class="admin-btn" href="{{ url_for('management.index', tab='agents', filter='all', edit=p.staff_id) }}">수정</a></td></tr>
             {% else %}<tr><td colspan="6" class="admin-empty">등록된 상담원이 없습니다.</td></tr>{% endfor %}
           </tbody></table></div><p class="table-note">한국 시간 기준 · 주간은 월요일부터 집계합니다.</p>
         </section>

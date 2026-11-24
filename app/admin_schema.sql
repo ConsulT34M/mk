@@ -1,18 +1,19 @@
 CREATE OR REPLACE VIEW visible_case AS
     SELECT * FROM support_case WHERE deleted_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS voice_session (
+    voice_id CHAR(36) PRIMARY KEY,
+    owner_hash BINARY(32) NOT NULL,
+    subject_ref CHAR(36) NOT NULL,
+    FOREIGN KEY (owner_hash) REFERENCES customer_session(token_hash) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS agent_quota (
     staff_id CHAR(36) PRIMARY KEY,
     daily INT UNSIGNED,
     weekly INT UNSIGNED,
     monthly INT UNSIGNED,
     FOREIGN KEY (staff_id) REFERENCES staff_account(staff_id)
-) ENGINE=InnoDB;
-
-CREATE TABLE IF NOT EXISTS recording_label (
-    recording_id CHAR(36) PRIMARY KEY,
-    label VARCHAR(120) NOT NULL,
-    FOREIGN KEY (recording_id) REFERENCES recording(recording_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS admin_change (

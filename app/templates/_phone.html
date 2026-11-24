@@ -13,6 +13,8 @@
             </select></label>
           </div>
           <label>고객 문의<textarea name="inquiry" rows="3" maxlength="4000">{{ phone.inquiry or '' }}</textarea></label>
+          <div class="two-col"><label>통화 구분<select name="call_direction"><option value="">미기록</option>{% for key,name in direction_names.items() %}<option value="{{ key }}" {% if phone.call_direction == key %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+          <label>실제 통화 시간(초)<input name="talk_seconds" type="number" min="0" max="86400" value="{{ phone.talk_seconds if phone.talk_seconds is number else '' }}"></label></div>
           <label>안내 내용<textarea name="guidance" rows="3" maxlength="4000">{{ phone.guidance or '' }}</textarea></label>
           <label>후속 조치<select name="followup_required">
             <option value="">선택</option><option value="yes" {% if phone.followup_required is sameas true %}selected{% endif %}>필요</option>
@@ -31,7 +33,7 @@
       </form>
       {% elif not closed %}<p class="muted">녹취 동의를 저장한 뒤 파일을 등록할 수 있습니다.</p>{% endif %}
       {% for rec in detail.recordings %}
-      <div class="record">{% if rec.label %}<strong>{{ rec.label }}</strong>{% endif %}<span>{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[rec.state] }}</span>
+      <div class="record">{% if rec.label or rec.ai %}<strong>{{ rec.label or 'AI 상담 녹취' }}</strong>{% endif %}<span>{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[rec.state] }}</span>
         {% if rec.playable %}<audio controls preload="none" src="/staff/cases/{{ case.case_id }}/recordings/{{ rec.recording_id }}/audio"></audio>
         {% elif rec.state == 'READY' %}<span class="muted">만료되어 재생할 수 없습니다.</span>{% endif %}
         <small>재생 기한 <time datetime="{{ rec.expires_at }}">{{ rec.expires_at }}</time></small></div>

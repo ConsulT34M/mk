@@ -55,7 +55,7 @@ CREATE TABLE entry_code (
 
 CREATE TABLE customer_session (
     token_hash BINARY(32) PRIMARY KEY,
-    case_id CHAR(36) NOT NULL,
+    case_id CHAR(36),
     expires_at DATETIME(6) NOT NULL,
     FOREIGN KEY (case_id) REFERENCES support_case(case_id),
     INDEX (expires_at)
@@ -88,9 +88,10 @@ CREATE TABLE phone_response (
 
 CREATE TABLE recording (
     recording_id CHAR(36) PRIMARY KEY,
-    case_id CHAR(36) NOT NULL,
+    case_id CHAR(36),
     upload_request_id CHAR(36) NOT NULL,
-    uploaded_by CHAR(36) NOT NULL,
+    uploaded_by CHAR(36),
+    label VARCHAR(120),
     state ENUM('PENDING','READY','FAILED','DELETE_PENDING','DESTROYED') NOT NULL,
     object_key VARCHAR(80) UNIQUE,
     size_bytes INT UNSIGNED,

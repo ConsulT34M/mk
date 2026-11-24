@@ -9,14 +9,16 @@ from flask import Flask, g, jsonify, make_response, redirect, render_template, r
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .admin import PERIODS, init_admin, management, quota_rows
-from .cases import agent_inbox, case_detail, cases as cases_blueprint, staff_notes, waiting_tickets
+from .admin import PERIODS, init_admin, management, migrate_desk, quota_rows
+from .cases import agent_inbox, case_detail, cases as cases_blueprint, intake_case, staff_notes, waiting_tickets
 from .common import (
-    CHAT_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
+    CHAT_COOKIE, INQUIRY_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
     payload, staff_user, text_field,
 )
 from .db import audit, close_db, db as get_db, new_id, one, run, stamp, utcnow
+from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, chat_breakdown, duration, notices, report_range, statistics
 from .recordings import purge, recordings as recordings_blueprint
+from .voice import voice
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
@@ -27,8 +29,12 @@ app.teardown_appcontext(close_db)
 app.register_blueprint(cases_blueprint)
 app.register_blueprint(recordings_blueprint)
 app.register_blueprint(management)
+app.register_blueprint(voice)
 app.add_template_filter(stamp, "utcstamp")
 app.cli.command("init-admin")(init_admin)
+app.cli.command("migrate-desk")(migrate_desk)
+app.jinja_env.globals.update(topic_names=TOPICS, outcome_names=OUTCOMES, direction_names=DIRECTIONS)
+app.add_template_filter(duration, "duration")
 
 
 @app.url_value_preprocessor
@@ -83,13 +89,15 @@ def finish(response):
         get_db().commit()
     response.headers["Cache-Control"] = "no-store"
     # Native login and ticket forms need their same-origin Origin header.
-    form_page = request.endpoint in {"home", "login", "queue_page", "detail_page"} and response.mimetype == "text/html"
+    form_page = request.endpoint in {"home", "login", "queue_page", "detail_page", "inquiry_page"} and response.mimetype == "text/html"
     response.headers["Referrer-Policy"] = "same-origin" if form_page else "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
-        "media-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; "
+        + ("media-src 'self' blob:; connect-src 'self' https://api.openai.com"
+           if request.endpoint == "inquiry_page" else "media-src 'self'")
     )
     return response
 
@@ -213,8 +221,10 @@ def desk_lists(user, tab):
     owned = agent_inbox(user["staff_id"])
     active = [item for item in owned if item["status"] == "IN_PROGRESS"]
     closed = [item for item in owned if item["status"] == "CLOSED"]
-    if tab not in {"dashboard", "desk", "closed"}:
-        tab = "desk" if active else "dashboard"
+    if tab not in {"dashboard", "desk", "calls", "chats", "closed"}:
+        tab = "dashboard"
+    if tab in ("calls","chats"):
+        active = [item for item in active if item["channel"] == ("PHONE" if tab == "calls" else "WEB")]
     return {
         "tab": tab, "items": closed if tab == "closed" else active, "tickets": waiting_tickets(),
         "active_count": len(active), "closed_count": len(closed),
@@ -225,7 +235,23 @@ def agent_desk(user, detail=None):
     explicit_case = detail is not None
     tab = request.args.get("tab")
     if detail:
-        tab = "closed" if detail["case"]["status"] == "CLOSED" else "desk"
+        case = detail["case"]
+        tab = "closed" if case["status"] == "CLOSED" else "calls" if case["channel"] == "PHONE" else "chats"
+    if tab in ("notices", "stats", "recordings"):
+        data = {}
+        if tab == "notices":
+            data["notices"] = notices()
+        else:
+            dates = report_range()
+            data["dates"] = dates
+            if tab == "recordings":
+                data["calls"] = call_history(user["staff_id"], dates)
+            else:
+                team = one("SELECT name FROM staff_team WHERE team_id=%s", (user["team_id"],)) if user["team_id"] else None
+                own_team = bool(team and request.args.get("scope") == "team")
+                data.update(team=team, scope="team" if own_team else "mine",
+                            report=statistics(dates, staff_id=user["staff_id"], own_team=own_team))
+        return render_template("agent.html", user=user, tab=tab, **data)
     data = desk_lists(user, tab)
     if not detail and data["tab"] != "dashboard" and data["items"]:
         try:
@@ -238,7 +264,7 @@ def agent_desk(user, detail=None):
         g.audit_target = ("CASE_LIST", None, None)
     case = detail["case"] if detail else None
     if data["tab"] == "dashboard":
-        data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
+        data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS, chats=chat_breakdown(user["staff_id"]), notices=notices(latest=True))
     return render_template(
         "agent.html", user=user, detail=detail, case=case, selected_id=case["case_id"] if case else None,
         explicit_case=explicit_case, recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5)), **data,
@@ -258,6 +284,8 @@ def desk_updates():
     }
     if data["tab"] == "dashboard":
         result["quota_html"] = render_template("_quota_rows.html", quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
+        result["chart_html"] = render_template("_chat_chart.html", chats=chat_breakdown(user["staff_id"]))
+        result["notice_html"] = render_template("_notices.html", notices=notices(latest=True))
     elif selected_id:
         result["notes_html"] = render_template("_agent_notes.html", notes=staff_notes(selected_id, agent_id=user["staff_id"]))
     return result
@@ -266,10 +294,47 @@ def desk_updates():
 @app.get("/chat")
 def chat_page():
     session = customer_session()
-    if not session or request.args.get("enter") == "1":
+    if not session or not session["case_id"] or request.args.get("enter") == "1":
         return render_template("entry.html")
     case = case_row(session["case_id"])
     return render_template("customer.html", case=case, actor="customer")
+
+
+@app.get("/inquiry")
+def inquiry_page():
+    visitor = customer_session(INQUIRY_COOKIE)
+    case = None
+    if visitor and visitor["case_id"]:
+        case = one("SELECT case_id,current_agent_id,closed_at FROM visible_case WHERE case_id=%s", (visitor["case_id"],))
+    policy_on = bool(one("SELECT enabled FROM voice_policy WHERE policy_id=1")["enabled"])
+    response = make_response(render_template("inquiry.html", case=case, opened=request.args.get("chat") == "open", policy_on=policy_on,
+                                             voice_enabled=policy_on and bool(os.environ.get("OPENAI_API_KEY", "").strip()),
+                                             recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5))))
+    if not visitor:
+        token = secrets.token_urlsafe(32)
+        expires = deadline("CHAT_SESSION_MINUTES", 60)
+        run("INSERT INTO customer_session (token_hash,expires_at) VALUES (%s,%s)", (digest(token), expires))
+        session_cookie(response, INQUIRY_COOKIE, token, expires)
+    return response
+
+
+@app.post("/inquiry/open")
+def open_inquiry():
+    # Lock the browser session so two tabs opening the chat can only create one ticket.
+    visitor = customer_session(INQUIRY_COOKIE, lock=True)
+    if not visitor:
+        return redirect(url_for("inquiry_page", reconnect=1), code=303)
+    previous = visitor["case_id"]
+    new_inquiry = previous and request.form.get("closed_case_id") == previous and one(
+        "SELECT case_id FROM visible_case WHERE case_id=%s AND closed_at IS NOT NULL", (previous,))
+    response = redirect(url_for("inquiry_page", chat="open"), code=303)
+    if previous is None or new_inquiry:
+        case_id, _ = intake_case(new_id(), new_id(), "WEB", request.form.get("inquiry_type") or None)
+        token = request.cookies[INQUIRY_COOKIE]
+        expires = deadline("CHAT_SESSION_MINUTES", 60)
+        run("UPDATE customer_session SET case_id=%s,expires_at=%s WHERE token_hash=%s", (case_id, expires, digest(token)))
+        session_cookie(response, INQUIRY_COOKIE, token, expires)
+    return response
 
 
 def demo_id(label):

@@ -1,0 +1,31 @@
+{% macro pie(chart, ring=false) %}
+{% if chart.total %}<div class="distribution">
+  <svg class="distribution-plot" viewBox="0 0 100 100" aria-hidden="true">
+    {% for part in chart.slices if part.count %}
+      {% if part.sector %}<path d="{{ part.sector }}" fill="{{ part.color }}"/>{% else %}<circle cx="50" cy="50" r="50" fill="{{ part.color }}"/>{% endif %}
+    {% endfor %}
+    {% if ring %}<circle cx="50" cy="50" r="34" fill="white"/><text x="50" y="55" text-anchor="middle" font-size="17" font-weight="700">{{ chart.total }}건</text>{% endif %}
+  </svg><ul class="distribution-key">{% for part in chart.slices %}
+    <li><span><svg width="9" height="9" aria-hidden="true"><circle cx="4.5" cy="4.5" r="4" fill="{{ part.color }}"/></svg> {{ part.label }}</span><b>{{ part.count }}건</b><small>{{ '%g'|format(part.percent|round(1)) }}%</small></li>
+  {% endfor %}</ul></div>{% else %}<p class="admin-empty">집계할 상담이 없습니다.</p>{% endif %}
+{% endmacro %}
+
+{% macro range_fields(dates) %}
+<label>시작일<input type="date" name="start" value="{{ dates.start }}" max="{{ dates.today }}" required></label>
+<label>종료일<input type="date" name="end" value="{{ dates.end }}" max="{{ dates.today }}" required></label>
+{% endmacro %}
+
+{% macro stats(report, dates, tab, team_id='', scope='', scope_label='') %}
+<form class="report-filter" method="get"><input type="hidden" name="tab" value="{{ tab }}">
+  {% if team_id %}<input type="hidden" name="team" value="{{ team_id }}">{% endif %}{% if scope %}<input type="hidden" name="scope" value="{{ scope }}">{% endif %}
+  {{ range_fields(dates) }}<button name="by" value="{{ report.by }}" class="admin-btn">조회</button>
+  <nav aria-label="통계 항목" class="report-nav">{% for key,label in [('activity','처리 현황'),('topics','문의 유형'),('outcomes','처리 결과'),('duration','통화 시간')] %}
+  <button name="by" value="{{ key }}" class="admin-btn" aria-pressed="{{ 'true' if report.by == key else 'false' }}">{{ label }}</button>{% endfor %}</nav>
+</form>
+<p class="table-note">{{ scope_label }} · 기간 내 종결 {{ '통화' if report.voice else '상담' }} {{ report.count }}건</p>
+<div class="table-scroll"><table class="admin-table"><thead><tr><th>{{ {'topics':'문의 유형','outcomes':'처리 결과'}.get(report.by,'날짜') }}</th>
+  {% for col in (['수신 시간','발신 시간','총 통화 시간','시간 기록 / 통화'] if report.voice else ['통화','채팅','합계']) %}<th>{{ col }}</th>{% endfor %}</tr></thead><tbody>
+  {% for label,values in report.lines %}<tr><th scope="row">{{ label }}</th>{% for value in values %}<td>{{ value }}</td>{% endfor %}</tr>
+  {% else %}<tr><td class="admin-empty" colspan="{{ 5 if report.voice else 4 }}">선택한 기간에 종결된 {{ '통화' if report.voice else '상담' }}가 없습니다.</td></tr>{% endfor %}</tbody>
+  {% if report.total %}<tfoot><tr><th scope="row">기간 합계</th>{% for value in report.total %}<td>{{ value }}</td>{% endfor %}</tr></tfoot>{% endif %}</table></div>
+{% endmacro %}

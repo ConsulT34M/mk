@@ -9,8 +9,16 @@ from .db import one, stamp, utcnow
 
 STAFF_COOKIE = "tm_staff"
 CHAT_COOKIE = "tm_chat"
+INQUIRY_COOKIE = "__Host-tm_inquiry"
 ERRORS = {
     "INVALID_INPUT": (400, "입력 항목을 확인해 주세요."),
+    "VOICE_NOT_CONFIGURED": (503, "서버에 OpenAI API 키를 설정하면 음성 상담을 시작할 수 있어요."),
+    "VOICE_VISITOR_EXPIRED": (401, "문의 페이지를 새로고침한 뒤 음성 상담을 다시 시작해 주세요."),
+    "VOICE_SESSION_NOT_FOUND": (404, "종료되었거나 찾을 수 없는 음성 상담이에요."),
+    "VOICE_AUTH_FAILED": (503, "음성 서비스의 API 키와 모델 접근 권한을 확인해 주세요."),
+    "VOICE_LIMIT_REACHED": (429, "음성 서비스 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요."),
+    "VOICE_UNAVAILABLE": (502, "음성 서비스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요."),
+    "VOICE_RECORDING_ENDED": (409, "종료된 녹취입니다."),
     "MISSING_INTAKE_REQUEST_ID": (400, "접수 요청 번호가 필요합니다."),
     "CLIENT_AUTH_REQUIRED": (401, "거래소 연동 자격을 확인해 주세요."),
     "STAFF_AUTH_REQUIRED": (401, "직원 로그인 정보를 확인해 주세요."),
@@ -29,6 +37,9 @@ ERRORS = {
     "ASSIGNMENT_CHANGED": (409, "그사이 담당자가 변경되었습니다. 목록을 새로고침한 뒤 다시 선택해 주세요."),
     "AGENT_NOT_FOUND": (404, "상담원 계정을 찾을 수 없습니다."),
     "LOGIN_ID_TAKEN": (409, "이미 사용 중인 직원 아이디입니다."),
+    "TEAM_NAME_TAKEN": (409, "이미 사용하는 팀 이름입니다."),
+    "TEAM_CHANGED": (409, "팀 구성이 변경되었습니다. 새로고침한 뒤 다시 선택해 주세요."),
+    "VOICE_DISABLED": (503, "현재 AI 음성 상담 운영이 중지되어 있습니다."),
     "MESSAGE_NOT_FOUND": (404, "채팅 메시지를 찾을 수 없습니다."),
     "STAFF_NOTE_NOT_FOUND": (404, "직원용 상담 기록을 찾을 수 없습니다."),
     "STAFF_NOTE_CHANGED": (409, "다른 관리자가 기록을 수정했습니다. 새로고침 후 내용을 확인해 주세요."),
@@ -86,7 +97,7 @@ def staff_user(required=True):
     user = None
     if token:
         user = one(
-            "SELECT a.staff_id, a.login_id, a.role FROM staff_session s "
+            "SELECT a.staff_id, a.login_id, a.role, a.display_name, a.team_id FROM staff_session s "
             "JOIN staff_account a ON a.staff_id=s.staff_id "
             "WHERE s.token_hash=%s AND s.expires_at>UTC_TIMESTAMP(6) AND a.is_active=1",
             (digest(token),),
@@ -98,16 +109,16 @@ def staff_user(required=True):
     return user
 
 
-def customer_session():
-    token = request.cookies.get(CHAT_COOKIE)
+def customer_session(cookie_name=CHAT_COOKIE, *, lock=False):
+    token = request.cookies.get(cookie_name)
     if token:
         row = one(
             "SELECT case_id, expires_at FROM customer_session "
-            "WHERE token_hash=%s AND expires_at>UTC_TIMESTAMP(6)", (digest(token),),
+            "WHERE token_hash=%s AND expires_at>UTC_TIMESTAMP(6)" + (" FOR UPDATE" if lock else ""), (digest(token),),
         )
-        if row:
+        if row and row["case_id"]:
             g.actor = "customer:" + row["case_id"]
-            return row
+        return row
     return None
 
 
@@ -162,6 +173,7 @@ def case_info(case):
         "case_id": case["case_id"], "channel": case["channel"], "status": status(case),
         "current_agent_id": case["current_agent_id"], "opened_at": stamp(case["opened_at"]),
         "closed_at": stamp(case["closed_at"]),
+        "inquiry_type": case.get("inquiry_type"), "outcome": case.get("outcome"),
     }
 
 

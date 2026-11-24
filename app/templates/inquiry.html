@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}고객센터{% endblock %}
+{% block styles %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ url_for('static', filename='inquiry.css') }}">
+{% endblock %}
+{% block scripts %}
+  <script defer src="{{ url_for('static', filename='voice-recording.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='voice.js') }}"></script>
+{% endblock %}
+{% block layout %}
+<header class="help-header">
+  <div class="help-brand"><img src="{{ url_for('static', filename='malgyeol-tm.png') }}" alt="말결 TM"><span>고객센터</span></div>
+  <a href="{{ url_for('chat_page', enter=1) }}">입장 코드로 연결</a>
+</header>
+<main class="help-main">
+  <section class="help-welcome" aria-labelledby="help-title">
+    <div class="help-intro">
+      <h1 id="help-title">무엇을<br>도와드릴까요?</h1>
+      <p>채팅으로 문의를 남기거나<br class="small-break"> AI와 음성으로 상담할 수 있어요.</p>
+      <div class="help-actions">
+        <form id="open-inquiry" method="post" action="{{ url_for('open_inquiry') }}">
+          {% if not case %}<label class="inquiry-type">문의 유형 <select name="inquiry_type"><option value="">선택 안 함</option>{% for key,name in topic_names.items() %}<option value="{{ key }}">{{ name }}</option>{% endfor %}</select></label>{% endif %}
+          <button class="help-button" type="submit" aria-haspopup="dialog"{% if case %} aria-controls="inquiry-chat" aria-expanded="{{ 'true' if opened else 'false' }}"{% endif %}>
+            {{ '내 채팅 열기' if case else '문의하기' }} <span aria-hidden="true">↗</span>
+          </button>
+        </form>
+        <button class="voice-open" id="voice-open" type="button" aria-haspopup="dialog" aria-controls="voice-dialog">AI 음성 상담</button>
+      </div>
+      {% if request.args.get('reconnect') %}<p class="reconnect-note" role="status">연결 시간이 지났어요. 쿠키를 허용한 뒤 문의하기를 다시 눌러 주세요.</p>{% endif %}
+    </div>
+    <div class="help-art" aria-hidden="true"><div class="brand-tile"><i></i></div><div class="reply-tile"><i></i></div></div>
+  </section>
+</main>
+<dialog id="voice-dialog" class="help-voice" aria-labelledby="voice-title" aria-describedby="voice-description"
+        data-session-url="{{ url_for('voice.start') }}" data-processor-url="{{ url_for('static', filename='voice-pcm.js') }}">
+  <header class="help-chat-head">
+    <h2 id="voice-title">AI 음성 상담</h2>
+    <form method="dialog"><button type="submit" aria-label="음성 상담 창 닫기">×</button></form>
+  </header>
+  <div class="voice-body">
+    <p id="voice-description">시작하면 마이크로 말한 내용이 OpenAI에 전달돼요. AI와 대화하다가 “상담원 연결해 주세요”라고 말하면 상담 티켓을 접수할 수 있어요.</p>
+    <div class="voice-consent"><label><input id="voice-consent" type="checkbox" aria-describedby="voice-retention"> 통화 녹취에 동의합니다 (선택)</label>
+      <small id="voice-retention">동의하면 고객과 AI의 음성을 저장해요. 관리자와 티켓 담당 상담원이 저장 후 {{ recording_minutes }}분 동안 들을 수 있어요.</small></div>
+    <p id="voice-state" role="status">{{ '현재 AI 음성 상담 운영이 중지되어 있습니다.' if not policy_on else '시작 버튼을 누르고 마이크 사용을 허용해 주세요.' if voice_enabled else '서버에 OpenAI API 키를 설정하면 음성 상담을 시작할 수 있어요.' }}</p>
+    <p id="voice-recording-state" role="status" hidden></p>
+    <p id="voice-ticket" role="status" hidden></p>
+    <audio id="voice-audio" autoplay controls hidden aria-label="AI 답변 재생"></audio>
+    <button class="help-button" id="voice-start" type="button"{% if not voice_enabled %} disabled{% endif %}>음성 상담 시작</button>
+    <button class="voice-open" id="voice-stop" type="button" hidden>음성 상담 종료</button>
+  </div>
+</dialog>
+{% if case %}
+<dialog id="inquiry-chat" class="help-chat" aria-labelledby="inquiry-title" data-chat data-id="{{ case.case_id }}" data-actor="inquiry"{% if opened %} open{% endif %}>
+  <header class="help-chat-head">
+    <div><h2 id="inquiry-title">고객 상담</h2><small>상담 번호 #{{ case.case_id[:8]|upper }}</small></div>
+    <button type="button" id="minimize-inquiry" aria-label="채팅창 닫기" title="채팅창 닫기"><span aria-hidden="true">−</span></button>
+  </header>
+  <div class="help-status" data-chat-state role="status">{% if case.closed_at %}상담 종료{% elif case.current_agent_id %}상담원 연결됨{% else %}상담원 연결 대기{% endif %}</div>
+  <div class="messages" data-messages role="log" aria-label="상담 대화" aria-live="polite" aria-relevant="additions text"></div>
+  <p class="chat-hint" data-chat-hint role="status"></p>
+  <form class="chat-compose" method="post" action="{{ url_for('cases.messages', case_id=case.case_id) }}" data-action="message" data-id="{{ case.case_id }}">
+    <label class="sr-only" for="chat-message">문의 메시지</label>
+    <input id="chat-message" name="body" autocomplete="off" placeholder="메시지를 입력해 주세요" maxlength="4000" required{% if case.closed_at %} disabled{% elif opened %} autofocus{% endif %}>
+    <button class="help-send" type="submit"{% if case.closed_at %} disabled{% endif %}>전송</button>
+  </form>
+  <form class="help-restart" data-new-inquiry method="post" action="{{ url_for('open_inquiry') }}"{% if not case.closed_at %} hidden{% endif %}>
+    <input type="hidden" name="closed_case_id" value="{{ case.case_id }}"><button type="submit" class="help-link">새 문의하기</button>
+  </form>
+  <a class="help-restart help-link" data-reconnect href="{{ url_for('inquiry_page') }}" hidden>문의 페이지로 돌아가기</a>
+</dialog>
+{% endif %}
+{% endblock %}

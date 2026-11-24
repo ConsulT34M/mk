@@ -11,14 +11,14 @@ function tell(message) {
   noticeTimer = setTimeout(() => { notice.hidden = true; }, 7000);
 }
 
-async function api(path, { method = "GET", body, actor } = {}) {
+async function api(path, { method = "GET", body, actor, signal, keepalive = false } = {}) {
   const headers = {};
   if (actor) headers["X-Chat-Actor"] = actor;
   if (body && !(body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(body);
   }
-  const result = await fetch(path, { method, headers, body, credentials: "same-origin", cache: "no-store" });
+  const result = await fetch(path, { method, headers, body, signal, keepalive, credentials: "same-origin", cache: "no-store" });
   if (result.status === 204) return null;
   const data = await result.json().catch(() => ({}));
   if (!result.ok) {
@@ -67,8 +67,10 @@ $("[data-logout]")?.addEventListener("click", async () => {
 });
 
 const chat = $("[data-chat]");
+const inquiryChat = $("#inquiry-chat");
 let lastHistory = "";
 let chatStopped = false;
+let chatRead = 0;
 
 function showMessages(items) {
   const list = $("[data-messages]", chat);
@@ -92,7 +94,7 @@ function showMessages(items) {
   if (!items.length) {
     const empty = document.createElement("p");
     empty.className = "empty";
-    empty.textContent = "표시할 메시지가 없습니다.";
+    empty.textContent = inquiryChat ? "아직 대화가 없어요." : "표시할 메시지가 없습니다.";
     fragment.append(empty);
   }
   list.replaceChildren(fragment);
@@ -100,23 +102,39 @@ function showMessages(items) {
 }
 
 async function refreshChat() {
-  if (!chat || chatStopped) return;
+  if (!chat || chatStopped || (inquiryChat && !inquiryChat.open)) return;
+  const read = ++chatRead;
   const hint = $("[data-chat-hint]", chat);
   const state = $("[data-chat-state]", chat);
   const controls = $(".chat-compose", chat).elements;
   try {
     const data = await api("/cases/" + chat.dataset.id + "/messages", { actor: chat.dataset.actor });
+    if (read !== chatRead) return;
     showMessages(data.items);
-    state.textContent = data.read_only ? "종결" : "상담 중";
-    hint.textContent = data.read_only ? "종결된 상담은 읽기 전용입니다." : "";
-    for (const control of controls) control.disabled = data.read_only;
+    if (inquiryChat) {
+      state.dataset.status = data.status;
+      state.textContent = {QUEUED: "상담원 연결 대기", IN_PROGRESS: "상담원 연결됨", CLOSED: "상담 종료"}[data.status];
+      hint.textContent = data.status === "QUEUED" ? "상담원이 연결되기 전에도 문의를 남길 수 있어요." :
+        data.read_only ? "종료된 상담이에요. 이전 대화를 확인할 수 있어요." : "";
+      $("[data-new-inquiry]", chat).hidden = !data.read_only;
+    } else {
+      state.textContent = data.read_only ? "종결" : "상담 중";
+      hint.textContent = data.read_only ? "종결된 상담은 읽기 전용입니다." : "";
+    }
+    for (const control of controls) control.disabled = data.read_only || (control.type === "submit" && !!control.form.dataset.busy);
   } catch (error) {
+    if (read !== chatRead) return;
     hint.textContent = error.message;
     state.textContent = "연결 확인";
     if ([401, 403, 404].includes(error.status)) {
       chatStopped = true;
       $("[data-messages]", chat).replaceChildren();
       for (const control of controls) control.disabled = true;
+      if (inquiryChat) {
+        hint.textContent = "이 상담의 연결이 끝났어요. 문의 페이지에서 다시 시작해 주세요.";
+        $("[data-new-inquiry]", chat).hidden = true;
+        $("[data-reconnect]", chat).hidden = false;
+      }
     }
   }
 }
@@ -129,6 +147,29 @@ if (chat) {
   poll();
 }
 
+if (inquiryChat) {
+  const launcher = $("#open-inquiry button");
+  launcher.form.addEventListener("submit", event => {
+    if (chatStopped) return;
+    event.preventDefault();
+    if (!inquiryChat.open) inquiryChat.show();
+    launcher.setAttribute("aria-expanded", "true");
+    history.replaceState(null, "", "?chat=open");
+    ($("#chat-message").disabled ? $("#minimize-inquiry") : $("#chat-message")).focus();
+    refreshChat();
+  });
+  function minimize() {
+    inquiryChat.close();
+    launcher.setAttribute("aria-expanded", "false");
+    history.replaceState(null, "", location.pathname);
+    launcher.focus();
+  }
+  $("#minimize-inquiry").addEventListener("click", minimize);
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && inquiryChat.open && !event.isComposing) minimize();
+  });
+}
+
 document.addEventListener("submit", async event => {
   const form = event.target;
   const action = form.dataset.action;
@@ -138,7 +179,7 @@ document.addEventListener("submit", async event => {
   const data = new FormData(form);
   const values = Object.fromEntries(data);
   const path = "/staff/cases/" + form.dataset.id;
-  const button = $("button[type=submit]", form);
+  const button = event.submitter || $("button[type=submit], button:not([type])", form);
   form.dataset.busy = "1";
   button.disabled = true;
   try {
@@ -159,12 +200,25 @@ document.addEventListener("submit", async event => {
           if (values.call_at) values.call_at = new Date(values.call_at).toISOString();
           if (values.followup_required) values.followup_required = values.followup_required === "yes";
         }
-        await api(form.action, { method: "POST", body: values });
+        if (form.hasAttribute("data-team-form")) {
+          values.members = data.getAll("members");
+          values.previous = JSON.parse(values.previous);
+        }
+        if (form.hasAttribute("data-ai-policy")) {
+          values.enabled = data.has("enabled");
+          values.offer_handoff = data.has("offer_handoff");
+        }
+        const saved = await api(form.action, { method: "POST", body: values });
         sessionStorage.setItem("adminNotice", form.dataset.done || "저장했습니다.");
-        if (form.dataset.return) location.assign(form.dataset.return);
+        if (form.hasAttribute("data-team-form")) location.assign("/admin?tab=org&team=" + encodeURIComponent(saved.team_id));
+        else if (form.dataset.return) location.assign(form.dataset.return);
         else location.reload();
         break;
       }
+      case "case-field":
+        await api(form.action, {method: "POST", body: values});
+        tell("문의 유형을 저장했습니다.");
+        break;
       case "phone": {
         const update = Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ""));
         if (update.call_at) update.call_at = new Date(update.call_at).toISOString();
@@ -187,7 +241,7 @@ document.addEventListener("submit", async event => {
         await api("/cases/" + form.dataset.id + "/messages", {
           method: "POST", actor, body: { client_message_id: form.dataset.requestId, body: values.body },
         });
-        form.reset();
+        if (form.elements.body.value === values.body) form.reset();
         delete form.dataset.lastBody;
         await refreshChat();
         break;
