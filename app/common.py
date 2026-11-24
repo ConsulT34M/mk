@@ -17,13 +17,23 @@ ERRORS = {
     "CHAT_SESSION_REQUIRED": (401, "거래소에서 새 입장 코드를 받아 주세요."),
     "CASE_ACCESS_DENIED": (403, "해당 작업을 수행할 권한이 없습니다."),
     "CASE_NOT_FOUND": (404, "해당 상담을 찾을 수 없습니다."),
+    "TICKET_DELETED": (410, "삭제된 상담 티켓입니다."),
     "RECORDING_NOT_FOUND": (404, "해당 녹취를 찾을 수 없습니다."),
     "REQUEST_KEY_CONFLICT": (409, "이미 다른 내용으로 사용한 요청 번호입니다."),
     "TICKET_TAKEN": (409, "다른 상담원이 먼저 받은 티켓입니다."),
+    "TICKET_NOT_CLAIMED": (409, "상담원이 티켓을 받은 뒤에 담당자를 변경할 수 있습니다."),
     "CASE_READ_ONLY": (409, "종결된 상담은 조회만 가능합니다."),
     "CHANNEL_MISMATCH": (409, "이 상담 채널에서 사용할 수 없는 기능입니다."),
     "PHONE_RESPONSE_INCOMPLETE": (422, "통화 일시, 녹취 안내 결과, 문의·안내 내용과 후속 조치를 입력해 주세요."),
     "AGENT_UNAVAILABLE": (422, "배정할 수 있는 활성 상담원을 선택해 주세요."),
+    "ASSIGNMENT_CHANGED": (409, "그사이 담당자가 변경되었습니다. 목록을 새로고침한 뒤 다시 선택해 주세요."),
+    "AGENT_NOT_FOUND": (404, "상담원 계정을 찾을 수 없습니다."),
+    "LOGIN_ID_TAKEN": (409, "이미 사용 중인 직원 아이디입니다."),
+    "MESSAGE_NOT_FOUND": (404, "채팅 메시지를 찾을 수 없습니다."),
+    "STAFF_NOTE_NOT_FOUND": (404, "직원용 상담 기록을 찾을 수 없습니다."),
+    "STAFF_NOTE_CHANGED": (409, "다른 관리자가 기록을 수정했습니다. 새로고침 후 내용을 확인해 주세요."),
+    "MESSAGE_REMOVED": (410, "삭제된 메시지입니다."),
+    "CONTENT_EXPIRED": (410, "상담 기록의 보관 기한이 지났습니다."),
     "RECORDING_CONSENT_REQUIRED": (409, "녹취에 동의한 전화 상담에만 등록할 수 있습니다."),
     "RECORDING_NOT_READY": (409, "녹취 저장 상태를 확인해 주세요."),
     "ENTRY_CODE_UNUSABLE": (410, "거래소에서 새 입장 코드를 받아 주세요."),
@@ -116,7 +126,7 @@ def agent():
 
 
 def case_row(case_id, lock=False):
-    sql = "SELECT * FROM support_case WHERE case_id=%s"
+    sql = "SELECT * FROM visible_case WHERE case_id=%s"
     case = one(sql + (" FOR UPDATE" if lock else ""), (case_id,))
     if not case:
         raise ApiError("CASE_NOT_FOUND")

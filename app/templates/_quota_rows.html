@@ -1,0 +1,11 @@
+{% for key, label in periods %}
+{% set goal = quota[key] %}{% set done = quota.completed[key] %}
+<div class="quota-period">
+  <div class="quota-row">
+    <span>{{ label }}</span>
+    <progress value="{{ [done, goal]|min if goal else 0 }}" max="{{ goal or 1 }}" aria-label="{{ label }} 처리 현황" aria-valuetext="{{ done }}건 처리, {{ '목표 미설정' if goal is none else '목표 ' ~ goal ~ '건' }}"></progress>
+    <span class="quota-value">{{ done }} / {{ '—' if goal is none else goal }}건</span>
+  </div>
+  <small>배정 {{ quota.assigned[key] }}건 · {{ '목표 미설정' if goal is none else '잔여 ' ~ ([goal - done, 0]|max) ~ '건' }}</small>
+</div>
+{% endfor %}

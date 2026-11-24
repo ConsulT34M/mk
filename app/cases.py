@@ -10,7 +10,7 @@ from .common import (
     content_visible, customer_session, deadline, digest, payload, staff_user, status,
     text_field, uuid_field, writable,
 )
-from .db import new_id, one, rows, run, stamp, utcnow
+from .db import admin_change, new_id, one, rows, run, stamp, utcnow
 from .recordings import recording_info
 
 cases = Blueprint("cases", __name__)
@@ -24,12 +24,22 @@ def partner():
     g.actor = "exchange"
 
 
+def intake_channel(value):
+    if value not in ("WEB", "PHONE"):
+        raise ApiError("INVALID_INPUT")
+    return value
+
+
 @cases.route("/cases", methods=["GET", "POST"])
 def exchange_cases():
     partner()
     if request.method == "GET":
         subject = uuid_field(request.args.get("support_subject_ref"))
-        items = rows("SELECT * FROM support_case WHERE support_subject_ref=%s ORDER BY opened_at DESC", (subject,))
+        kind = intake_channel(request.args.get("channel", "WEB"))
+        items = rows(
+            "SELECT * FROM visible_case WHERE support_subject_ref=%s AND channel=%s ORDER BY opened_at DESC,case_id",
+            (subject, kind),
+        )
         return {"items": [{"case_id": case["case_id"], "status": status(case)} for case in items]}
 
     data = payload()
@@ -37,23 +47,29 @@ def exchange_cases():
         raise ApiError("MISSING_INTAKE_REQUEST_ID")
     subject = uuid_field(data.get("support_subject_ref"))
     intake = uuid_field(data["intake_request_id"])
+    kind = intake_channel(data.get("channel", "WEB"))
     candidate = new_id()
     run(
         "INSERT INTO support_case (case_id, channel, support_subject_ref, intake_request_id) "
-        "VALUES (%s, 'WEB', %s, %s) ON DUPLICATE KEY UPDATE case_id=case_id",
-        (candidate, subject, intake),
+        "VALUES (%s,%s,%s,%s) ON DUPLICATE KEY UPDATE case_id=case_id",
+        (candidate, kind, subject, intake),
     )
-    case = one("SELECT case_id, support_subject_ref FROM support_case WHERE intake_request_id=%s", (intake,))
-    if case["support_subject_ref"] != subject:
+    case = one("SELECT case_id,channel,support_subject_ref,deleted_at FROM support_case WHERE intake_request_id=%s", (intake,))
+    if case["deleted_at"]:
+        raise ApiError("TICKET_DELETED")
+    if case["support_subject_ref"] != subject or case["channel"] != kind:
         raise ApiError("REQUEST_KEY_CONFLICT")
-    return {"case_id": case["case_id"]}, 201 if case["case_id"] == candidate else 200
+    created = case["case_id"] == candidate
+    if created and kind == "PHONE":
+        run("INSERT INTO phone_response (case_id) VALUES (%s)", (candidate,))
+    return {"case_id": case["case_id"]}, 201 if created else 200
 
 
 @cases.post("/cases/<uuid:case_id>/entry-codes")
 def grant_entry(case_id):
     partner()
     subject = uuid_field(payload().get("support_subject_ref"))
-    case = case_row(case_id)
+    case = case_row(case_id, lock=True)
     channel(case, "WEB")
     if case["support_subject_ref"] != subject:
         raise ApiError("CASE_NOT_FOUND")
@@ -68,9 +84,9 @@ def staff_cases():
     user = staff_user()
     g.audit_target = ("CASE_LIST", None, None)
     if user["role"] == "ADMIN":
-        result = rows("SELECT * FROM support_case ORDER BY opened_at DESC")
+        result = rows("SELECT * FROM visible_case ORDER BY opened_at DESC")
     else:
-        result = rows("SELECT * FROM support_case WHERE current_agent_id=%s ORDER BY opened_at DESC", (user["staff_id"],))
+        result = rows("SELECT * FROM visible_case WHERE current_agent_id=%s ORDER BY opened_at DESC", (user["staff_id"],))
     return {"items": [case_info(case) for case in result]}
 
 
@@ -82,7 +98,7 @@ def agents():
 
 def waiting_tickets():
     items = rows(
-        "SELECT case_id, channel, opened_at FROM support_case "
+        "SELECT case_id, channel, opened_at FROM visible_case "
         "WHERE current_agent_id IS NULL AND closed_at IS NULL ORDER BY opened_at, case_id"
     )
     for item in items:
@@ -93,9 +109,9 @@ def waiting_tickets():
 def agent_inbox(staff_id):
     items = rows(
         "SELECT c.*, CASE WHEN c.channel='PHONE' THEN LEFT(p.inquiry,100) ELSE "
-        "(SELECT LEFT(m.body,100) FROM chat_message m WHERE m.case_id=c.case_id "
+        "(SELECT LEFT(m.body,100) FROM chat_message m WHERE m.case_id=c.case_id AND m.body<>'' "
         "ORDER BY m.message_id DESC LIMIT 1) END AS preview "
-        "FROM support_case c LEFT JOIN phone_response p ON p.case_id=c.case_id "
+        "FROM visible_case c LEFT JOIN phone_response p ON p.case_id=c.case_id "
         "WHERE c.current_agent_id=%s ORDER BY c.opened_at DESC, c.case_id", (staff_id,),
     )
     result = []
@@ -105,29 +121,36 @@ def agent_inbox(staff_id):
     return result
 
 
-@cases.post("/staff/phone-cases")
-def new_phone_case():
-    admin()
-    case_id = new_id()
-    run("INSERT INTO support_case (case_id, channel) VALUES (%s, 'PHONE')", (case_id,))
-    run("INSERT INTO phone_response (case_id) VALUES (%s)", (case_id,))
-    return {"case_id": case_id}, 201
-
-
 @cases.post("/staff/cases/<uuid:case_id>/assignee")
 def assign(case_id):
     user = admin()
-    new_agent = uuid_field(payload().get("new_agent_id"))
+    data = payload()
+    new_agent = uuid_field(data.get("new_agent_id"))
+    person = lock_active_agent(new_agent)
     case = case_row(case_id, lock=True)
     writable(case)
-    if not one("SELECT staff_id FROM staff_account WHERE staff_id=%s AND role='AGENT' AND is_active=1", (new_agent,)):
-        raise ApiError("AGENT_UNAVAILABLE")
+    previous = case["current_agent_id"]
+    if previous is None:
+        raise ApiError("TICKET_NOT_CLAIMED")
+    if "previous_agent_id" in data and previous not in (data["previous_agent_id"], new_agent):
+        raise ApiError("ASSIGNMENT_CHANGED")
+    if previous != new_agent:
+        old = one("SELECT login_id FROM staff_account WHERE staff_id=%s", (previous,))
+        admin_change("상담 재배정", f"{old['login_id']} → {person['login_id']}", case_id)
     return set_assignee(case, new_agent, user["staff_id"])
+
+
+def lock_active_agent(staff_id):
+    person = one("SELECT login_id FROM staff_account WHERE staff_id=%s AND role='AGENT' AND is_active=1 FOR UPDATE", (staff_id,))
+    if not person:
+        raise ApiError("AGENT_UNAVAILABLE")
+    return person
 
 
 @cases.post("/staff/cases/<uuid:case_id>/claim")
 def claim(case_id):
     user = agent()
+    lock_active_agent(user["staff_id"])
     case = case_row(case_id, lock=True)
     writable(case)
     if case["current_agent_id"] not in (None, user["staff_id"]):
@@ -161,20 +184,46 @@ def phone_info(case_id):
     return phone
 
 
+def assignment_log(case_id):
+    assignments = rows(
+        "SELECT a.changed_at, s.login_id FROM assignment_history a "
+        "LEFT JOIN staff_account s ON s.staff_id=a.new_agent_id "
+        "WHERE a.case_id=%s ORDER BY a.assignment_id", (case_id,),
+    )
+    return [{"login_id": a["login_id"], "at": stamp(a["changed_at"])} for a in assignments]
+
+
+def staff_notes(case_id=None, *, agent_id=None):
+    sql = (
+        "SELECT n.note_id,n.case_id,n.body,n.created_at,n.updated_at,a.login_id FROM staff_note n "
+        "JOIN staff_account a ON a.staff_id=n.created_by JOIN visible_case c ON c.case_id=n.case_id "
+        "WHERE n.body IS NOT NULL AND (c.content_expires_at IS NULL OR c.content_expires_at>UTC_TIMESTAMP(6))"
+    )
+    args = []
+    if case_id is not None:
+        sql += " AND n.case_id=%s"
+        args.append(case_id)
+    if agent_id is not None:
+        sql += " AND c.current_agent_id=%s"
+        args.append(agent_id)
+    notes = rows(sql + " ORDER BY n.note_id DESC", args)
+    for note in notes:
+        note.update(created_at=stamp(note["created_at"]), updated_at=stamp(note["updated_at"]))
+    return notes
+
+
 @cases.get("/staff/cases/<uuid:case_id>")
 def case_detail(case_id):
     g.audit_target = ("CASE_VIEW", case_id, None)
     case = assigned_case(case_id)
     visible = content_visible(case)
-    recs = rows("SELECT * FROM recording WHERE case_id=%s ORDER BY expires_at DESC", (case_id,))
-    assignments = rows(
-        "SELECT a.changed_at, s.login_id FROM assignment_history a JOIN staff_account s ON s.staff_id=a.new_agent_id "
-        "WHERE a.case_id=%s ORDER BY a.assignment_id", (case_id,),
-    )
+    recs = rows("SELECT r.*,l.label FROM recording r LEFT JOIN recording_label l ON l.recording_id=r.recording_id "
+                "WHERE r.case_id=%s ORDER BY r.expires_at DESC", (case_id,))
     return {
         "case": case_info(case), "result_note": case["result_note"] if visible else None,
         "customer_ref": case["support_subject_ref"] if visible else None, "content_expired": not visible,
-        "assignments": [{"login_id": a["login_id"], "at": stamp(a["changed_at"])} for a in assignments],
+        "assignments": assignment_log(case_id),
+        "staff_notes": staff_notes(case_id, agent_id=g.actor) if visible else [],
         "phone_response": phone_info(case_id) if visible and case["channel"] == "PHONE" else None,
         "recordings": [recording_info(item) for item in recs],
     }
@@ -185,8 +234,14 @@ def update_phone(case_id):
     case = assigned_case(case_id, lock=True)
     channel(case, "PHONE")
     writable(case)
-    data = payload()
+    return save_phone_response(case_id, payload())
+
+
+def save_phone_response(case_id, data, allow_clear=False):
     edits = {}
+    if allow_clear:
+        edits = {key: None for key, value in data.items() if value is None}
+        data = {key: value for key, value in data.items() if value is not None}
     if "call_at" in data:
         try:
             call_at = datetime.fromisoformat(str(data["call_at"]).replace("Z", "+00:00"))
@@ -272,13 +327,15 @@ def messages(case_id):
     if not sending:
         history = []
         if content_visible(case):
-            history = rows("SELECT * FROM chat_message WHERE case_id=%s ORDER BY message_id", (case_id,))
+            history = rows("SELECT * FROM chat_message WHERE case_id=%s AND body<>'' ORDER BY message_id", (case_id,))
         return {"items": [message_info(row) for row in history], "read_only": bool(case["closed_at"])}
     data = payload()
     message_key = uuid_field(data.get("client_message_id"))
     body = text_field(data.get("body"))
     existing = one("SELECT * FROM chat_message WHERE case_id=%s AND client_message_id=%s", (case_id, message_key))
     if existing and content_visible(case):
+        if not existing["body"]:
+            raise ApiError("MESSAGE_REMOVED")
         if existing["author_staff_id"] != author or existing["body"] != body:
             raise ApiError("REQUEST_KEY_CONFLICT")
         return message_info(existing)

@@ -1,0 +1,6 @@
+{% for n in notes %}
+<div class="staff-note">
+  <small>{{ n.login_id }} · <time datetime="{{ n.updated_at }}">{{ n.updated_at[:16]|replace('T', ' ') }}</time></small>
+  <p class="memo">{{ n.body }}</p>
+</div>
+{% else %}<p class="muted">작성된 직원용 상담 기록이 없습니다.</p>{% endfor %}

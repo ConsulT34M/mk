@@ -9,7 +9,8 @@ from flask import Flask, g, jsonify, make_response, redirect, render_template, r
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .cases import agent_inbox, agents, case_detail, cases as cases_blueprint, staff_cases, waiting_tickets
+from .admin import PERIODS, init_admin, management, quota_rows
+from .cases import agent_inbox, case_detail, cases as cases_blueprint, staff_notes, waiting_tickets
 from .common import (
     CHAT_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
     payload, staff_user, text_field,
@@ -25,6 +26,9 @@ app.config["RECORDING_DIR"] = os.getenv("RECORDING_DIR", "/var/lib/tm-recordings
 app.teardown_appcontext(close_db)
 app.register_blueprint(cases_blueprint)
 app.register_blueprint(recordings_blueprint)
+app.register_blueprint(management)
+app.add_template_filter(stamp, "utcstamp")
+app.cli.command("init-admin")(init_admin)
 
 
 @app.url_value_preprocessor
@@ -103,7 +107,7 @@ def login():
     password = data.get("password")
     if not isinstance(password, str) or not password or len(password) > 512:
         raise ApiError("INVALID_INPUT")
-    user = one("SELECT * FROM staff_account WHERE login_id=%s AND is_active=1", (login_id,))
+    user = one("SELECT * FROM staff_account WHERE login_id=%s AND is_active=1 FOR UPDATE", (login_id,))
     if not user or not check_password_hash(user["password_hash"], password):
         raise ApiError("STAFF_AUTH_REQUIRED")
     token = secrets.token_urlsafe(32)
@@ -112,8 +116,9 @@ def login():
     if previous:
         run("DELETE FROM staff_session WHERE token_hash=%s", (digest(previous),))
     run("INSERT INTO staff_session (token_hash,staff_id,expires_at) VALUES (%s,%s,%s)", (digest(token), user["staff_id"], expires))
-    response = redirect(url_for("queue_page"), code=303) if form_login else jsonify(
-        staff_id=user["staff_id"], role=user["role"], expires_at=stamp(expires),
+    destination = staff_home(user)
+    response = redirect(destination, code=303) if form_login else jsonify(
+        staff_id=user["staff_id"], role=user["role"], expires_at=stamp(expires), destination=destination,
     )
     return session_cookie(response, STAFF_COOKIE, token, expires)
 
@@ -131,10 +136,14 @@ def enter_chat(code, as_page=False):
     if not isinstance(code, str) or not code or len(code) > 256:
         raise ApiError("ENTRY_CODE_UNUSABLE")
     key = digest(code)
+    # Lock the ticket before its entry code, in the same order as ticket deletion.
+    case = one("SELECT case_id,closed_at FROM visible_case WHERE case_id="
+               "(SELECT case_id FROM entry_code WHERE code_hash=%s) FOR UPDATE", (key,))
+    if not case:
+        raise ApiError("ENTRY_CODE_UNUSABLE")
     item = one("SELECT * FROM entry_code WHERE code_hash=%s FOR UPDATE", (key,))
     if not item or item["used_at"] or item["expires_at"] <= utcnow():
         raise ApiError("ENTRY_CODE_UNUSABLE")
-    case = case_row(item["case_id"])
     run("UPDATE entry_code SET used_at=UTC_TIMESTAMP(6) WHERE code_hash=%s", (key,))
     previous = request.cookies.get(CHAT_COOKIE)
     if previous:
@@ -165,10 +174,15 @@ def health():
     return {"status": "ok"}
 
 
+def staff_home(user):
+    return url_for("management.index" if user["role"] == "ADMIN" else "queue_page")
+
+
 @app.get("/")
 def home():
-    if staff_user(required=False):
-        return redirect(url_for("queue_page"))
+    user = staff_user(required=False)
+    if user:
+        return redirect(staff_home(user))
     return render_template("login.html")
 
 
@@ -178,7 +192,7 @@ def queue_page():
     if not user:
         return redirect(url_for("home"))
     if user["role"] == "ADMIN":
-        return render_template("queue.html", user=user, items=staff_cases()["items"], team=agents()["items"])
+        return redirect(staff_home(user))
     return agent_desk(user)
 
 
@@ -217,12 +231,14 @@ def agent_desk(user, detail=None):
         try:
             detail = case_detail(data["items"][0]["case_id"])
         except ApiError as error:
-            if error.code != "CASE_ACCESS_DENIED":
+            if error.code not in ("CASE_ACCESS_DENIED", "CASE_NOT_FOUND"):
                 raise
             return redirect(url_for("queue_page", tab=data["tab"]))
     if not detail:
         g.audit_target = ("CASE_LIST", None, None)
     case = detail["case"] if detail else None
+    if data["tab"] == "dashboard":
+        data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
     return render_template(
         "agent.html", user=user, detail=detail, case=case, selected_id=case["case_id"] if case else None,
         explicit_case=explicit_case, recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5)), **data,
@@ -231,13 +247,20 @@ def agent_desk(user, detail=None):
 
 @app.get("/portal/updates")
 def desk_updates():
-    data = desk_lists(agent(), request.args.get("tab"))
+    user = agent()
+    data = desk_lists(user, request.args.get("tab"))
     g.audit_target = ("CASE_LIST", None, None)
     template = "_tickets.html" if data["tab"] == "dashboard" else "_inbox.html"
-    return {
+    selected_id = request.args.get("case_id")
+    result = {
         "waiting": len(data["tickets"]), "active": data["active_count"], "closed": data["closed_count"],
-        "html": render_template(template, selected_id=request.args.get("case_id"), **data),
+        "html": render_template(template, selected_id=selected_id, **data),
     }
+    if data["tab"] == "dashboard":
+        result["quota_html"] = render_template("_quota_rows.html", quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
+    elif selected_id:
+        result["notes_html"] = render_template("_agent_notes.html", notes=staff_notes(selected_id, agent_id=user["staff_id"]))
+    return result
 
 
 @app.get("/chat")
@@ -256,11 +279,12 @@ def demo_id(label):
 @app.cli.command("seed-demo")
 def seed_demo():
     """Create the local demo's staff accounts, two web cases and one phone case."""
-    for login_id, role in (("admin", "ADMIN"), ("agent1", "AGENT"), ("agent2", "AGENT")):
-        if not one("SELECT staff_id FROM staff_account WHERE login_id=%s", (login_id,)):
+    if not one("SELECT staff_id FROM staff_account LIMIT 1"):
+        for login_id, role in (("admin", "ADMIN"), ("test", "AGENT"), ("agent1", "AGENT"), ("agent2", "AGENT")):
+            password = "test" if login_id == "test" else os.environ[f"DEMO_{login_id.upper()}_PASSWORD"]
             run(
                 "INSERT INTO staff_account (staff_id,login_id,password_hash,role) VALUES (%s,%s,%s,%s)",
-                (new_id(), login_id, generate_password_hash(os.environ[f"DEMO_{login_id.upper()}_PASSWORD"]), role),
+                (new_id(), login_id, generate_password_hash(password), role),
             )
     for n in (1, 2):
         run(
@@ -270,16 +294,20 @@ def seed_demo():
         )
     phone_id = demo_id("phone")
     if not one("SELECT case_id FROM support_case WHERE case_id=%s", (phone_id,)):
-        run("INSERT INTO support_case (case_id,channel) VALUES (%s,'PHONE')", (phone_id,))
+        run(
+            "INSERT INTO support_case (case_id,channel,support_subject_ref,intake_request_id) VALUES (%s,'PHONE',%s,%s)",
+            (phone_id, demo_id("subject-1"), demo_id("intake-phone")),
+        )
         run("INSERT INTO phone_response (case_id) VALUES (%s)", (phone_id,))
     get_db().commit()
 
 
 @app.cli.command("demo-entry")
 @click.option("--customer", type=click.Choice(["1", "2"]), default="1", show_default=True)
-@click.option("--new", "new_case", is_flag=True, help="Open a new web case.")
-def demo_entry(customer, new_case):
-    """Get a chat entry code through the exchange API for a synthetic customer."""
+@click.option("--channel", "kind", type=click.Choice(["WEB", "PHONE"]), default="WEB", show_default=True)
+@click.option("--new", "new_case", is_flag=True, help="Open a new ticket through the exchange API.")
+def demo_entry(customer, kind, new_case):
+    """Print a web chat entry code or a phone ticket ID for a synthetic customer."""
     base = "http://127.0.0.1:8000"
     headers = {"Authorization": "Bearer " + os.environ["PARTNER_TOKEN"], "Content-Type": "application/json"}
     subject = demo_id("subject-" + customer)
@@ -290,9 +318,15 @@ def demo_entry(customer, new_case):
             return json.load(result)
 
     if new_case:
-        case_id = exchange("/cases", {"support_subject_ref": subject, "intake_request_id": new_id()})["case_id"]
+        case_id = exchange("/cases", {"support_subject_ref": subject, "intake_request_id": new_id(), "channel": kind})["case_id"]
     else:
-        case_id = exchange("/cases?support_subject_ref=" + subject)["items"][0]["case_id"]
+        items = exchange(f"/cases?support_subject_ref={subject}&channel={kind}")["items"]
+        if not items:
+            raise click.ClickException("이 채널에 접수된 티켓이 없습니다. --new로 접수해 주세요.")
+        case_id = items[0]["case_id"]
+    if kind == "PHONE":
+        click.echo(case_id)
+        return
     grant = exchange(f"/cases/{case_id}/entry-codes", {"support_subject_ref": subject})
     click.echo(grant["entry_code"])
 

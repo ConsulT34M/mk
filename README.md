@@ -19,22 +19,45 @@ docker compose up -d --build --wait
 
 직원 포털은 [https://localhost:8443](https://localhost:8443), 고객 채팅은 [https://localhost:8443/chat](https://localhost:8443/chat)입니다. 첫 실행 시 Nginx가 로컬용 자체 서명 인증서를 생성합니다. `docker compose stop`으로 중지하고 `docker compose start`로 다시 시작합니다.
 
-## 시연
+## 로컬 시연 계정
 
-| 로그인 아이디 | 비밀번호가 있는 로컬 파일 | 역할 |
-|---|---|---|
-| `admin` | `.env`의 `DEMO_ADMIN_PASSWORD` | 전화 접수, 상담 배정·재배정 |
-| `agent1`, `agent2` | `.env`의 `DEMO_AGENT1_PASSWORD`, `DEMO_AGENT2_PASSWORD` | 대기 티켓 수락, 배정된 상담의 응대·종결·녹취 재생 |
+| 역할 | 아이디 | 비밀번호 | 로그인 후 화면 |
+|---|---|---|---|
+| 관리자 | `admin` | `admin` | [관리자 대시보드](https://localhost:8443/admin) |
+| 상담원 | `test` | `test` | [상담원 포털](https://localhost:8443/portal) |
 
-1. 관리자로 로그인합니다. 다른 브라우저 프로필에서는 `agent1`으로 로그인합니다.
-2. 아래 명령으로 가상 고객 1번의 입장 코드를 받고 고객 채팅 화면에 붙여넣습니다. 상담원 대시보드에는 미배정 웹채팅·전화 요청이 접수순으로 표시됩니다. ‘상담 받기’를 먼저 누른 상담원에게 티켓이 배정되고 해당 상담이 열립니다. 관리자가 지정한 상담도 ‘내 상담’에서 열 수 있습니다. `--customer 2`로 고객을 바꾸거나 `--new`를 추가해 새 상담을 접수할 수 있습니다.
+새 로컬 환경의 기본값입니다. 새 DB를 만들 때 `.env`에 지정한 `DEMO_ADMIN_PASSWORD`를 관리자 초기 비밀번호로 사용하며, 기존 DB의 계정과 비밀번호는 재시작 후에도 유지됩니다. 재배정 시연용 상담원 `agent1`, `agent2`의 비밀번호는 `.env`의 `DEMO_AGENT1_PASSWORD`, `DEMO_AGENT2_PASSWORD`에 있습니다.
+
+## 티켓 접수와 담당자 변경
+
+1. 서로 다른 브라우저 프로필에서 관리자와 상담원으로 로그인합니다.
+2. 외부 서버가 `POST /cases`로 웹채팅 또는 전화 요청을 보내면 미배정 티켓이 생성됩니다. 아래 명령으로 외부 요청을 시연할 수 있습니다. 첫 번째 명령은 고객 채팅 입장 코드를, 두 번째 명령은 새 전화 티켓 번호를 출력합니다.
 
    ```powershell
-   docker compose exec -T app flask demo-entry --customer 1
+   docker compose exec -T app flask demo-entry --customer 1 --new
+   docker compose exec -T app flask demo-entry --customer 1 --channel PHONE --new
    ```
 
-3. 관리자가 전화 상담을 접수·배정하면 담당 상담원이 통화 일시·문의·안내·후속 조치·녹취 동의 결과를 저장합니다. 동의한 건에는 `setup_demo.py`가 생성한 `.local/sample.wav`를 등록할 수 있습니다. 거절한 건은 메모로 종결합니다.
-4. 전화 상담을 종결하기 전에 관리자가 `agent2`에게 재배정하면 다음 요청부터 새 담당자만 녹취를 재생할 수 있습니다. 상담원이 처리 결과를 입력해 종결하면 기록은 읽기 전용이 됩니다.
+3. 상담원 대시보드에서 ‘상담 받기’를 먼저 누른 상담원이 티켓을 가져갑니다. 고객은 입장 코드로 채팅에 참여합니다. 전화 상담의 담당자는 응대 내용과 녹취 동의 여부를 기록하고, 동의한 건에 `.local/sample.wav`를 등록할 수 있습니다.
+4. 수락한 티켓은 관리자 대시보드에 ‘진행 중’으로 표시됩니다. 관리자는 이때 ‘담당자 변경’으로 다른 활성 상담원에게 재배정할 수 있습니다. 이후 새 담당자가 이어서 응대하고 처리 결과를 입력해 종결합니다.
+
+## 관리자 페이지 (F07)
+
+`/admin` 대시보드에는 전체·대기·진행·종결 티켓 수, 담당자, 오늘 상담원별 처리 건수와 잔여 목표가 표시됩니다.
+
+| 요구사항 | 메뉴 | 관리자 작업 |
+|---|---|---|
+| FR-026 | 상담원 계정 | 계정 생성·조회, 아이디 및 비밀번호 수정, 계정 삭제(비활성화)와 재활성화. 비활성화하면 세션이 종료되고 진행 중인 티켓은 대기열로 돌아갑니다. |
+| FR-027 | 상담 기록 → 웹채팅 | 대화 조회, 개별 메시지 수정·삭제, 상담 기록 전체 삭제. 변경 사항은 고객과 상담원의 대화에도 반영됩니다. |
+| FR-028 | 상담 기록 → 녹취 | 파일 상태·크기·보관 기한 조회, 표시명 수정, 녹취 삭제. 삭제 요청 시 재생이 즉시 차단되고 파기 작업이 원본을 정리합니다. |
+| FR-029 | 상담 할당량 | 상담원별 일·주·월 목표 수정, 기간별 배정·처리·잔여 건수 조회. 한국 시간 기준으로 집계하며 한 주는 월요일에 시작합니다. |
+| FR-030 | 변경 이력 | 계정·할당량·상담 기록·녹취의 변경과 삭제, 재배정 전후 담당자를 작업한 관리자와 시각으로 확인합니다. |
+
+관리자는 보관 기한 내 전화 응대 기록과 종결 메모도 직접 수정할 수 있습니다. 상담원이 재배정되면 녹취 재생 권한은 현재 담당자에게 넘어갑니다.
+
+‘상담 기록 → 채팅·전화 상담 내역’의 각 행에서 ‘수정’을 누르면 해당 상담을 편집할 수 있습니다. ‘삭제’를 확인하면 티켓이 관리자 목록과 상담원 대기열에서 사라지고 고객 채팅과 녹취 재생도 차단됩니다. 상담 내용은 즉시 삭제되고 녹취 원본은 파기 작업이 정리합니다. 삭제한 관리자와 시각은 변경 이력에 남습니다.
+
+‘상담 기록 → 기록 추가’에서 기존 티켓을 골라 직원용 기록을 작성합니다. 관리자는 목록에서 수정·삭제할 수 있고 현재 담당 상담원은 상담 상세에서 읽을 수 있습니다. 고객 채팅에는 표시되지 않습니다. 추가·수정·삭제 시각과 작업자는 변경 이력에 남으며, 기록 본문은 티켓의 상담 내용과 같은 기한에 파기됩니다.
 
 ## 거래소 연동
 
@@ -42,9 +65,9 @@ docker compose up -d --build --wait
 
 | 요청 | 용도 |
 |---|---|
-| `POST /cases` | `support_subject_ref`, `intake_request_id` 두 UUID로 접수합니다. 같은 접수는 같은 `case_id`를 반환합니다. |
-| `GET /cases?support_subject_ref=…` | 해당 고객의 웹 상담 상태 목록을 조회합니다. |
-| `POST /cases/{case_id}/entry-codes` | 본문에 `support_subject_ref`를 보내 일회용 `entry_code`를 발급받습니다. |
+| `POST /cases` | `support_subject_ref`(고객 UUID), `intake_request_id`(접수 UUID), `channel`로 미배정 티켓을 생성합니다. 채널은 `WEB` 또는 `PHONE`이며, 생략하면 `WEB`입니다. 같은 요청을 재시도하면 같은 `case_id`를 반환합니다. 같은 접수 UUID에 고객이나 채널이 다르면 HTTP 409이며, 삭제된 티켓의 접수 UUID는 HTTP 410입니다. |
+| `GET /cases?support_subject_ref=…&channel=PHONE` | 해당 고객의 요청 채널 티켓과 상태를 조회합니다. 채널을 생략하면 웹채팅 목록을 반환합니다. |
+| `POST /cases/{case_id}/entry-codes` | 웹채팅 티켓에 `support_subject_ref`를 보내 일회용 `entry_code`를 발급받습니다. |
 
 고객 브라우저에서 포털의 `/chat/enter`로 `entry_code`를 HTML 폼 POST하면 방 전용 쿠키를 발급하고 채팅으로 이동합니다. 포털과 같은 출처의 클라이언트는 `POST /chat/sessions`에 같은 필드를 JSON으로 보낼 수 있습니다. [Notion API 명세](https://app.notion.com/p/f160de8f474583b083d281a75e3f3f80)
 
@@ -64,9 +87,13 @@ Git에는 소스와 실행 구성을 올립니다. 생성된 `.env`, 샘플 WAV,
 
 ## 통합 검증
 
-별도 시연 환경을 띄운 뒤 아래 명령을 실행하면 합성 상담 데이터를 생성해 거래소 접수, 채팅, 배정, 녹취 동의·재생·종결을 검증합니다. `--port`에는 해당 환경이 공개한 포트를 지정합니다.
+아래 명령은 검증 전용 프로젝트에 합성 티켓을 생성해 외부 접수, 동시 수락, 관리자 수정·재배정, 녹취와 종결을 검증합니다.
 
 ```powershell
-docker compose cp nginx:/etc/nginx/local-tls/cert.pem .local/cert.pem
-python tests/smoke.py --port 8443 --cert .local/cert.pem
+$env:PORTAL_PORT = '18443'
+docker compose -p mk-check up -d --build --wait
+docker compose -p mk-check cp nginx:/etc/nginx/local-tls/cert.pem .local/check-cert.pem
+python tests/smoke.py --port 18443 --cert .local/check-cert.pem
+docker compose -p mk-check down
+Remove-Item Env:PORTAL_PORT
 ```

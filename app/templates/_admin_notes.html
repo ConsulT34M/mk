@@ -1,0 +1,49 @@
+{% set note_channel = selected|default('ALL') %}
+{% set list_url = url_for('management.index', tab='history', channel=note_channel) %}
+{% if note_editor is defined and note_editor is not none %}
+<section class="board-panel admin-panel" id="note-editor">
+  <h3>{{ '기록 수정' if note_editor else '기록 추가' }}</h3>
+  {% if note_editor or note_tickets %}
+  <form method="post" class="admin-stack" data-action="admin" data-return="{{ list_url }}"
+        action="{{ url_for('management.change_note', case_id=note_editor.case_id, note_id=note_editor.note_id) if note_editor else url_for('management.create_note') }}">
+    {% if note_editor %}
+      <p class="record-context">상담 티켓 #{{ note_editor.case_id[:8]|upper }} · 작성자 {{ note_editor.login_id }}</p>
+      <input type="hidden" name="updated_at" value="{{ note_editor.updated_at }}">
+    {% else %}
+      <input type="hidden" name="request_id" value="{{ note_request_id }}">
+      <label>상담 티켓<select name="case_id" required>
+        <option value="">티켓 선택</option>
+        {% for t in note_tickets %}<option value="{{ t.case_id }}">#{{ t.case_id[:8]|upper }} · {{ '웹채팅' if t.channel == 'WEB' else '전화' }} · {{ states[t.status] }} · {{ t.login_id or '미배정' }}</option>{% endfor %}
+      </select></label>
+    {% endif %}
+    <label>기록 내용<textarea name="body" rows="3" maxlength="4000" required aria-describedby="note-audience">{{ note_editor.body or '' }}</textarea></label>
+    <small class="muted" id="note-audience">관리자와 이 티켓의 담당 상담원이 볼 수 있습니다.</small>
+    <div class="admin-actions"><button type="submit" class="admin-primary">저장</button><a class="admin-btn" href="{{ list_url }}">취소</a></div>
+  </form>
+  {% else %}
+  <p class="admin-empty">기록을 추가할 수 있는 티켓이 없습니다.</p><a class="admin-btn" href="{{ list_url }}">목록으로</a>
+  {% endif %}
+</section>
+{% endif %}
+<section class="board-panel admin-panel" id="staff-notes">
+  <div class="section-title"><h3>직원용 상담 기록</h3><span class="count">{{ notes|length }}</span></div>
+  {% if notes %}
+  <div class="table-scroll"><table class="admin-table"><thead><tr>
+    {% if not detail %}<th>상담 티켓</th>{% endif %}<th>기록 내용</th><th>작성자</th><th>마지막 저장</th><th>관리</th>
+  </tr></thead><tbody>
+    {% for n in notes %}<tr data-note-id="{{ n.note_id }}">
+      {% if not detail %}<td><a class="case-ref" href="{{ url_for('management.history', case_id=n.case_id, _anchor='staff-notes') }}">#{{ n.case_id[:8]|upper }}</a></td>{% endif %}
+      <td class="note-text">{{ n.body if detail else n.body|truncate(140, true, '…') }}</td>
+      <td>{{ n.login_id }}</td><td>{{ time_at(n.updated_at) }}</td>
+      <td><div class="admin-actions">
+        <a class="admin-btn" href="{{ url_for('management.index', tab='history', channel=note_channel, note=n.note_id) }}">수정</a>
+        <form method="post" action="{{ url_for('management.change_note', case_id=n.case_id, note_id=n.note_id) }}" data-action="admin"
+              data-return="{{ url_for('management.history', case_id=n.case_id) if detail else list_url }}" data-confirm="이 직원용 상담 기록을 삭제할까요?" data-done="직원용 상담 기록을 삭제했습니다.">
+          <input type="hidden" name="operation" value="delete"><input type="hidden" name="updated_at" value="{{ n.updated_at }}">
+          <button type="submit" class="admin-btn danger">삭제</button>
+        </form>
+      </div></td>
+    </tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="admin-empty">작성된 직원용 상담 기록이 없습니다.</p>{% endif %}
+</section>

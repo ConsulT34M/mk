@@ -28,10 +28,10 @@
   {% if board %}
   <main class="dashboard">
     <div class="board-inner">
-      <div class="board-title"><h2>대시보드</h2><span id="metrics-note">예시 데이터</span></div>
+      <div class="board-title"><h2>대시보드</h2></div>
       <div class="board-metrics">
         <section class="board-panel" aria-labelledby="chat-summary-title" aria-describedby="metrics-note">
-          <h3 id="chat-summary-title">누적 채팅 현황</h3>
+          <div class="quota-heading"><h3 id="chat-summary-title">누적 채팅 현황</h3><span id="metrics-note">예시 데이터</span></div>
           <div class="chat-breakdown">
             <div class="chat-donut"><strong>40건</strong></div>
             <ul class="chat-legend">
@@ -41,17 +41,9 @@
             </ul>
           </div>
         </section>
-        <section class="board-panel quota-panel" aria-labelledby="quota-title" aria-describedby="metrics-note">
-          <div class="quota-heading"><h3 id="quota-title">내 배정량</h3><span>배정 / 목표</span></div>
-          <div class="quota-list">
-            {% for period, assigned, goal in [('일간', 6, 8), ('주간', 12, 20), ('월간', 18, 40)] %}
-            <div class="quota-row">
-              <span>{{ period }}</span>
-              <progress value="{{ assigned }}" max="{{ goal }}" aria-label="{{ period }} 배정량" aria-valuetext="목표 {{ goal }}건 중 {{ assigned }}건"></progress>
-              <span class="quota-value">{{ assigned }} / {{ goal }}건</span>
-            </div>
-            {% endfor %}
-          </div>
+        <section class="board-panel quota-panel" aria-labelledby="quota-title">
+          <div class="quota-heading"><h3 id="quota-title">내 배정량</h3><span>처리 / 목표</span></div>
+          <div class="quota-list" id="live-quota">{% include "_quota_rows.html" %}</div>
         </section>
       </div>
       <section class="board-panel ticket-panel" aria-labelledby="ticket-title">

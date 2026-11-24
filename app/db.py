@@ -64,3 +64,10 @@ def audit(action, actor, case_id=None, recording_id=None, result="OK"):
         "VALUES (%s, %s, %s, %s, %s)",
         (action, actor, case_id, recording_id, result),
     )
+
+
+def admin_change(action, target, case_id=None):
+    run(
+        "INSERT INTO admin_change (actor_id, action, target, case_id) VALUES (%s,%s,%s,%s)",
+        (g.actor, action, target, case_id),
+    )

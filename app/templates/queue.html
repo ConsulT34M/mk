@@ -1,44 +1,49 @@
-{% extends "base.html" %}
-{% block title %}상담 현황{% endblock %}
-{% block main %}
-<div class="page-heading">
-  <div><h1>상담 현황</h1><p class="sub">접수된 웹·전화 상담을 확인하고 담당자를 배정하세요.</p></div>
-  <form method="post" action="/staff/phone-cases" data-action="new-phone"><button class="primary" type="submit">+ 전화 상담 접수</button></form>
-</div>
-<div class="filters" aria-label="상담 상태 필터">
-  {% for key, label in [('ALL','전체'),('QUEUED','배정 대기'),('IN_PROGRESS','진행 중'),('CLOSED','종결')] %}
-  <button type="button" data-filter="{{ key }}" aria-pressed="{{ 'true' if loop.first else 'false' }}">
-    {{ label }} <span>{{ items|length if loop.first else items|selectattr('status','equalto',key)|list|length }}</span>
-  </button>
-  {% endfor %}
-</div>
-<section class="panel table-panel" aria-label="상담 목록">
-  <div class="table-wrap"><table>
-    <thead><tr><th>상담 번호</th><th>채널</th><th>상태</th><th>접수 일시</th><th>담당자</th></tr></thead>
-    <tbody>
-    {% for item in items %}
-    <tr data-case-status="{{ item.status }}">
-      <td><span class="identifier" title="{{ item.case_id }}">{{ item.case_id[:8]|upper }}</span></td>
-      <td>{{ '웹채팅' if item.channel == 'WEB' else '전화' }}</td>
-      <td><span class="badge {{ item.status|lower }}">{{ {'QUEUED':'배정 대기','IN_PROGRESS':'진행 중','CLOSED':'종결'}[item.status] }}</span></td>
-      <td><time datetime="{{ item.opened_at }}">{{ item.opened_at[:16] }}</time></td>
-      <td>
-      {% if item.status != 'CLOSED' %}
-        <form method="post" action="/staff/cases/{{ item.case_id }}/assignee" class="inline" data-action="assign" data-id="{{ item.case_id }}">
-          <select aria-label="{{ item.case_id[:8] }} 담당 상담원" name="new_agent_id" required>
-            <option value="">담당자 선택</option>
-            {% for p in team %}<option value="{{ p.staff_id }}" {% if p.staff_id == item.current_agent_id %}selected{% endif %}>{{ p.login_id }}</option>{% endfor %}
-          </select><button type="submit" class="small">{{ '변경' if item.current_agent_id else '배정' }}</button>
-        </form>
-      {% else %}
-        {% for p in team if p.staff_id == item.current_agent_id %}{{ p.login_id }}{% endfor %}
-      {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table></div>
-  <p class="empty" id="empty-list" {% if items %}hidden{% endif %}>표시할 상담이 없습니다.</p>
+{% if tab == 'overview' %}
+<nav class="summary-cards" aria-label="상담 상태 필터">
+  {% for key, label in [('ALL','전체 상담'),('QUEUED','배정 대기'),('IN_PROGRESS','진행 중'),('CLOSED','종결')] %}
+  <a class="summary-card {{ key|lower }}" href="{{ url_for('management.index') if key == 'ALL' else url_for('management.index', status=key) }}" {% if key == selected %}aria-current="page"{% endif %}>
+    <span class="summary-label"><i aria-hidden="true"></i>{{ label }}</span><strong>{{ total if key == 'ALL' else counts[key] }}<small>건</small></strong>
+  </a>{% endfor %}
+</nav>
+<section class="board-panel admin-panel">
+  <div class="section-title"><h3>오늘 상담원별 처리 현황</h3><a class="refresh-list" href="{{ url_for('management.index', tab='quotas') }}">할당량 관리</a></div>
+  <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담원</th><th>현재 진행 중</th><th>오늘 배정</th><th>오늘 처리</th><th>일간 목표</th><th>잔여</th></tr></thead><tbody>
+    {% for p in team %}<tr>
+      <td class="identity-cell">{{ p.login_id }}{% if not p.is_active %} <small>비활성</small>{% endif %}</td>
+      <td>{{ in_progress[p.staff_id] }}건</td><td>{{ p.assigned.daily }}건</td><td>{{ p.completed.daily }}건</td>
+      <td>{{ '미설정' if p.daily is none else p.daily ~ '건' }}</td><td>{{ '—' if p.daily is none else ([p.daily - p.completed.daily, 0]|max) ~ '건' }}</td>
+    </tr>{% else %}<tr><td colspan="6" class="admin-empty">등록된 상담원이 없습니다.</td></tr>{% endfor %}
+  </tbody></table></div>
 </section>
-<a class="utility-link" href="/portal">목록 새로고침 ↻</a>
-{% endblock %}
+{% endif %}
+<section class="board-panel admin-panel"{% if tab == 'history' %} id="case-history"{% endif %}>
+  <div class="section-title"><h3>{{ '상담 티켓' if tab == 'overview' else '채팅·전화 상담 내역' }}</h3>
+    {% if tab == 'history' %}<nav class="switches" aria-label="상담 기록 필터">{% for key, label in [('ALL','전체'),('WEB','웹채팅'),('PHONE','전화'),('RECORDINGS','녹취')] %}<a href="{{ url_for('management.index', tab=tab, channel=key) }}" {% if selected == key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
+    {% else %}<span class="count">{{ items|length }}</span><a class="refresh-list" href="{{ request.full_path.rstrip('?') }}">새로고침</a>{% endif %}
+  </div>
+  <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담 번호</th><th>채널</th><th>상태</th><th>접수 일시</th><th>담당 상담원</th>{% if tab == 'history' %}<th>녹취</th><th>관리</th>{% endif %}</tr></thead><tbody>
+    {% for item in items %}<tr data-case-id="{{ item.case_id }}">
+      <td><a class="case-ref" title="{{ item.case_id }} 상담 기록 열기" aria-label="{{ item.case_id[:8]|upper }} 상담 기록 열기" href="{{ url_for('management.history', case_id=item.case_id) }}">#{{ item.case_id[:8]|upper }}</a></td>
+      <td><span class="channel"><i aria-hidden="true" class="icon {{ 'chat-icon' if item.channel == 'WEB' else 'phone-icon' }}"></i>{{ '웹채팅' if item.channel == 'WEB' else '전화' }}</span></td>
+      <td>{{ state(item.status) }}</td><td>{{ time_at(item.opened_at) }}</td>
+      <td>{% if tab == 'overview' and item.status == 'IN_PROGRESS' %}
+        <form method="post" action="{{ url_for('cases.assign', case_id=item.case_id) }}" class="admin-actions assign-form" data-action="admin" data-done="담당 상담원을 변경했습니다.">
+          <input type="hidden" name="previous_agent_id" value="{{ item.current_agent_id }}">
+          <select name="new_agent_id" required aria-label="{{ item.case_id[:8] }} 담당 상담원">{% for p in team if p.is_active %}<option value="{{ p.staff_id }}" {% if p.staff_id == item.current_agent_id %}selected{% endif %}>{{ p.login_id }}</option>{% endfor %}</select>
+          <button type="submit" class="admin-btn">담당자 변경</button>
+        </form>{% else %}{{ item.login_id or '상담원 수락 대기' }}{% endif %}</td>
+      {% if tab == 'history' %}
+      <td>{% if item.recording_count %}<a href="{{ url_for('management.history', case_id=item.case_id, channel=selected, _anchor='recordings') }}">{{ item.recording_count }}건</a>{% else %}—{% endif %}</td>
+      <td><div class="admin-actions case-actions">
+        {% if item.content_visible or item.editable_recording %}
+        <a class="admin-btn" href="{{ url_for('management.history', case_id=item.case_id, channel=selected, _anchor='history-editor' if item.content_visible else 'recordings') }}">수정</a>
+        {% else %}<button class="admin-btn" type="button" disabled title="보관 기한이 지나 수정할 기록이 없습니다.">수정</button>{% endif %}
+        <form method="post" action="{{ url_for('management.edit_history', case_id=item.case_id) }}" data-action="admin"
+              data-confirm="#{{ item.case_id[:8]|upper }} 티켓과 상담 내용·녹취를 삭제할까요? 관리자 목록과 상담원 대기열에서도 사라집니다."
+              data-done="상담 티켓을 삭제했습니다.">
+          <input type="hidden" name="operation" value="delete_ticket"><button type="submit" class="admin-btn danger">삭제</button>
+        </form>
+      </div></td>{% endif %}
+    </tr>{% else %}<tr><td class="admin-empty" colspan="{{ 7 if tab == 'history' else 5 }}">표시할 상담이 없습니다.</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>

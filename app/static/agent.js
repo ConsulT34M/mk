@@ -8,6 +8,8 @@ const listURL = new URL("/portal/updates", location.origin);
 listURL.searchParams.set("tab", desk.dataset.tab);
 if (desk.dataset.selected) listURL.searchParams.set("case_id", desk.dataset.selected);
 let previousHTML;
+let previousQuota;
+let previousNotes;
 let refreshing = false;
 
 function filterInbox() {
@@ -30,6 +32,18 @@ async function refreshDesk() {
     const data = await api(listURL);
     syncStatus.textContent = "";
     document.querySelectorAll("[data-total]").forEach(el => { el.textContent = data[el.dataset.total]; });
+    if (data.quota_html && data.quota_html !== previousQuota) {
+      document.getElementById("live-quota").innerHTML = data.quota_html;
+      previousQuota = data.quota_html;
+    }
+    if (data.notes_html !== undefined && data.notes_html !== previousNotes) {
+      const notes = document.getElementById("agent-staff-notes");
+      if (notes) {
+        notes.innerHTML = data.notes_html;
+        formatTimes(notes);
+      }
+      previousNotes = data.notes_html;
+    }
     if (data.html === previousHTML || liveList.querySelector("form[data-busy]")) return;
     const focused = document.activeElement?.closest("[data-case-id], [data-ticket-id]");
     // The server renders the same escaped Jinja partial as the initial page.

@@ -14,9 +14,10 @@ def main():
     if not env.exists():
         keys = (
             "MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "PARTNER_TOKEN",
-            "DEMO_ADMIN_PASSWORD", "DEMO_AGENT1_PASSWORD", "DEMO_AGENT2_PASSWORD",
+            "DEMO_AGENT1_PASSWORD", "DEMO_AGENT2_PASSWORD",
         )
         with os.fdopen(os.open(env, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as out:
+            out.write("DEMO_ADMIN_PASSWORD=admin\n")
             for key in keys:
                 out.write(f"{key}={secrets.token_urlsafe(32)}\n")
         print("Created .env with local credentials.")

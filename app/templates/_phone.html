@@ -31,7 +31,7 @@
       </form>
       {% elif not closed %}<p class="muted">녹취 동의를 저장한 뒤 파일을 등록할 수 있습니다.</p>{% endif %}
       {% for rec in detail.recordings %}
-      <div class="record"><span>{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[rec.state] }}</span>
+      <div class="record">{% if rec.label %}<strong>{{ rec.label }}</strong>{% endif %}<span>{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[rec.state] }}</span>
         {% if rec.playable %}<audio controls preload="none" src="/staff/cases/{{ case.case_id }}/recordings/{{ rec.recording_id }}/audio"></audio>
         {% elif rec.state == 'READY' %}<span class="muted">만료되어 재생할 수 없습니다.</span>{% endif %}
         <small>재생 기한 <time datetime="{{ rec.expires_at }}">{{ rec.expires_at }}</time></small></div>

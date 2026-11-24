@@ -52,6 +52,9 @@ document.querySelectorAll("[data-datetime]").forEach(el => {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   el.value = local.toISOString().slice(0, 16);
 });
+document.querySelectorAll("form[data-phone-fields]").forEach(form => {
+  for (const [name, value] of new FormData(form)) form.elements.namedItem(name).dataset.original = value;
+});
 
 $("[data-logout]")?.addEventListener("click", async () => {
   try {
@@ -63,24 +66,13 @@ $("[data-logout]")?.addEventListener("click", async () => {
   }
 });
 
-const filters = document.querySelectorAll("[data-filter]");
-filters.forEach(button => button.addEventListener("click", () => {
-  let count = 0;
-  filters.forEach(item => item.setAttribute("aria-pressed", String(item === button)));
-  document.querySelectorAll("[data-case-status]").forEach(row => {
-    row.hidden = button.dataset.filter !== "ALL" && row.dataset.caseStatus !== button.dataset.filter;
-    if (!row.hidden) count++;
-  });
-  $("#empty-list").hidden = count > 0;
-}));
-
 const chat = $("[data-chat]");
 let lastHistory = "";
 let chatStopped = false;
 
 function showMessages(items) {
   const list = $("[data-messages]", chat);
-  const signature = items.length + ":" + (items.at(-1)?.message_id || "");
+  const signature = JSON.stringify(items);
   if (lastHistory === signature) return;
   const nearEnd = !lastHistory || list.scrollHeight - list.scrollTop - list.clientHeight < 60;
   lastHistory = signature;
@@ -151,18 +143,28 @@ document.addEventListener("submit", async event => {
   button.disabled = true;
   try {
     switch (action) {
-      case "login":
-        await api("/staff/sessions", { method: "POST", body: values });
-        location.assign("/portal");
+      case "login": {
+        const staff = await api("/staff/sessions", { method: "POST", body: values });
+        location.assign(staff.destination);
         break;
-      case "new-phone":
-        await api("/staff/phone-cases", { method: "POST", body: {} });
-        location.reload();
+      }
+      case "admin": {
+        if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) break;
+        if (form.hasAttribute("data-phone-fields")) {
+          for (const key of Object.keys(values)) {
+            if (values[key] === form.elements.namedItem(key).dataset.original) delete values[key];
+            else if (values[key] === "") values[key] = null;
+          }
+          if (!Object.keys(values).length) { tell("수정할 내용이 없습니다."); break; }
+          if (values.call_at) values.call_at = new Date(values.call_at).toISOString();
+          if (values.followup_required) values.followup_required = values.followup_required === "yes";
+        }
+        await api(form.action, { method: "POST", body: values });
+        sessionStorage.setItem("adminNotice", form.dataset.done || "저장했습니다.");
+        if (form.dataset.return) location.assign(form.dataset.return);
+        else location.reload();
         break;
-      case "assign":
-        await api(path + "/assignee", { method: "POST", body: values });
-        location.reload();
-        break;
+      }
       case "phone": {
         const update = Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ""));
         if (update.call_at) update.call_at = new Date(update.call_at).toISOString();
@@ -198,12 +200,53 @@ document.addEventListener("submit", async event => {
         break;
     }
   } catch (error) {
-    tell(error.message);
+    if (action === "admin" && error.status === 401) location.assign("/");
+    else tell(error.message);
   } finally {
     delete form.dataset.busy;
     if (action !== "message" || (!chatStopped && !$("#chat-message").disabled)) button.disabled = false;
   }
 });
+
+if (document.querySelector(".admin-desk")) {
+  window.addEventListener("pageshow", event => { if (event.persisted) location.reload(); });
+  const message = sessionStorage.getItem("adminNotice");
+  if (message) {
+    sessionStorage.removeItem("adminNotice");
+    tell(message);
+  }
+}
+
+const adminDashboard = $("#admin-dashboard");
+if (adminDashboard) {
+  const syncStatus = $("#admin-sync-status");
+  let loading = false;
+  async function refreshDashboard() {
+    if (loading || document.hidden) return;
+    loading = true;
+    try {
+      const response = await fetch(location.href, { cache: "no-store" });
+      if (response.redirected || response.status === 403) { location.replace("/"); return; }
+      if (!response.ok) throw new Error();
+      const page = new DOMParser().parseFromString(await response.text(), "text/html");
+      const next = page.getElementById("admin-dashboard");
+      if (!next) throw new Error();
+      syncStatus.textContent = "";
+      // Keep an administrator's pending choice intact when another ticket changes.
+      const choosing = [...adminDashboard.querySelectorAll(".assign-form")].some(form =>
+        form.elements.new_agent_id.value !== form.elements.previous_agent_id.value);
+      if (choosing || adminDashboard.contains(document.activeElement) || adminDashboard.querySelector("[data-busy]")) return;
+      formatTimes(next);
+      if (!adminDashboard.isEqualNode(next)) adminDashboard.replaceChildren(...next.childNodes);
+    } catch {
+      syncStatus.textContent = "대시보드 연결 중…";
+    } finally {
+      loading = false;
+    }
+  }
+  setInterval(refreshDashboard, 5000);
+  document.addEventListener("visibilitychange", refreshDashboard);
+}
 
 document.querySelectorAll("input[type=file]").forEach(input => input.addEventListener("change", () => {
   delete input.form.dataset.requestId;

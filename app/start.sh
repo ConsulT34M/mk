@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+flask --app app init-admin
 flask --app app seed-demo
 (
     while :; do

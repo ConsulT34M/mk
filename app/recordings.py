@@ -7,7 +7,7 @@ from pathlib import Path
 
 from flask import Blueprint, current_app, g, request, send_file
 
-from .common import ApiError, assigned_case, case_row, channel, deadline, uuid_field, writable
+from .common import ApiError, assigned_case, channel, deadline, uuid_field, writable
 from .db import audit, db, new_id, one, rows, run, stamp, utcnow
 
 recordings = Blueprint("recordings", __name__)
@@ -18,6 +18,7 @@ def recording_info(item):
         "recording_id": item["recording_id"], "state": item["state"],
         "expires_at": stamp(item["expires_at"]),
         "playable": item["state"] == "READY" and item["expires_at"] > utcnow(),
+        "label": item.get("label") if item["expires_at"] > utcnow() and item["state"] not in ("DELETE_PENDING", "DESTROYED") else None,
     }
 
 
@@ -123,6 +124,13 @@ def play(case_id, recording_id):
         raise ApiError("RECORDING_STORE_FAILED") from None
 
 
+def purge_case_content(case_id):
+    run("DELETE FROM chat_message WHERE case_id=%s", (case_id,))
+    run("DELETE FROM phone_response WHERE case_id=%s", (case_id,))
+    run("DELETE FROM staff_note WHERE case_id=%s", (case_id,))
+    run("UPDATE support_case SET result_note=NULL, content_purged_at=UTC_TIMESTAMP(6) WHERE case_id=%s", (case_id,))
+
+
 def purge():
     due = rows(
         "SELECT recording_id FROM recording WHERE state='DELETE_PENDING' "
@@ -142,17 +150,16 @@ def purge():
                     "UPDATE recording SET state='DESTROYED', object_key=NULL, size_bytes=NULL, sha256=NULL, "
                     "destroyed_at=UTC_TIMESTAMP(6) WHERE recording_id=%s", (rid,),
                 )
+                run("DELETE FROM recording_label WHERE recording_id=%s", (rid,))
                 audit("RECORDING_PURGE", "retention", item["case_id"], rid)
         db().commit()
 
     due = rows("SELECT case_id FROM support_case WHERE content_expires_at<=UTC_TIMESTAMP(6) AND content_purged_at IS NULL")
     for row in due:
         key = row["case_id"]
-        case = case_row(key, lock=True)
+        case = one("SELECT content_purged_at,content_expires_at FROM support_case WHERE case_id=%s FOR UPDATE", (key,))
         if not case["content_purged_at"] and case["content_expires_at"] <= utcnow():
-            run("DELETE FROM chat_message WHERE case_id=%s", (key,))
-            run("DELETE FROM phone_response WHERE case_id=%s", (key,))
-            run("UPDATE support_case SET result_note=NULL, content_purged_at=UTC_TIMESTAMP(6) WHERE case_id=%s", (key,))
+            purge_case_content(key)
             audit("CASE_CONTENT_PURGE", "retention", key)
         db().commit()
     for table in ("entry_code", "customer_session", "staff_session"):

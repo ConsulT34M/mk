@@ -35,8 +35,11 @@
   <details open><summary>상담 정보</summary>
     <dl class="card-body info-grid"><dt>상담 번호</dt><dd class="mono">{{ case.case_id }}</dd><dt>접수 채널</dt><dd>{{ '웹채팅' if web else '전화' }}</dd><dt>담당자</dt><dd>{{ user.login_id }}</dd></dl>
   </details>
+  <details open><summary>직원용 상담 기록</summary><div class="card-body" id="agent-staff-notes">
+    {% with notes=detail.staff_notes %}{% include "_agent_notes.html" %}{% endwith %}
+  </div></details>
   <details open><summary>처리 결과</summary><div class="card-body">
-    {% if closed %}<p class="memo">{{ detail.result_note or '기록 보관 기한이 지났습니다.' }}</p>
+    {% if closed %}<p class="memo">{{ detail.result_note or ('기록 보관 기한이 지났습니다.' if detail.content_expired else '저장된 처리 결과가 없습니다.') }}</p>
     {% else %}<form method="post" action="{{ url_for('cases.close_case', case_id=case.case_id) }}" class="stack" data-action="close" data-id="{{ case.case_id }}">
       <label>종결 메모<textarea name="result_note" rows="3" maxlength="4000" required></textarea></label>
       <button class="secondary" type="submit">상담 종결</button>
@@ -44,7 +47,7 @@
   </div></details>
   <details open><summary>상담 이력</summary><ol class="card-body history">
     <li>상담 접수<small><time datetime="{{ case.opened_at }}">{{ case.opened_at[:16] }}</time></small></li>
-    {% for change in detail.assignments %}<li>{{ change.login_id }} 배정<small><time datetime="{{ change.at }}">{{ change.at[:16] }}</time></small></li>{% endfor %}
+    {% for change in detail.assignments %}<li>{{ change.login_id ~ ' 배정' if change.login_id else '배정 해제' }}<small><time datetime="{{ change.at }}">{{ change.at[:16] }}</time></small></li>{% endfor %}
     {% if closed %}<li>상담 종결<small><time datetime="{{ case.closed_at }}">{{ case.closed_at[:16] }}</time></small></li>{% endif %}
   </ol></details>
 </aside>
