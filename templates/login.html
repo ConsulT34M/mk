@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}직원 로그인{% endblock %}
+{% block main %}
+<div class="entry-layout">
+  <section class="entry-card">
+    <h1>직원 로그인</h1>
+    <p class="sub">발급받은 직원 계정으로 상담 데스크에 접속하세요.</p>
+    {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    <form method="post" action="/staff/sessions" data-action="login" class="stack">
+      <label>직원 아이디<input name="login_id" autocomplete="username" maxlength="80" required autofocus></label>
+      <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit">로그인</button>
+    </form>
+    <div class="entry-footer"><span>상담을 요청한 고객이신가요?</span><a href="/chat">고객 채팅 입장 →</a></div>
+  </section>
+</div>
+{% endblock %}

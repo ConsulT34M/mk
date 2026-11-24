@@ -1,0 +1,10 @@
+<section class="panel chat-panel" data-chat data-id="{{ case.case_id }}" data-actor="{{ actor }}">
+  <div class="panel-title"><h2>상담 대화</h2><span class="badge" data-chat-state>연결 중</span></div>
+  <div class="messages" data-messages role="log" aria-live="polite" aria-relevant="additions text"></div>
+  <form method="post" action="/cases/{{ case.case_id }}/messages" class="chat-compose" data-action="message" data-id="{{ case.case_id }}">
+    <label class="sr-only" for="chat-message">메시지</label>
+    <input id="chat-message" name="body" autocomplete="off" placeholder="메시지 입력" maxlength="4000" required>
+    <button class="primary" type="submit">전송</button>
+  </form>
+  <p class="chat-hint" data-chat-hint role="status"></p>
+</section>

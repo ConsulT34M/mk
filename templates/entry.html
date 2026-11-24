@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}고객 채팅 입장{% endblock %}
+{% block main %}
+<div class="entry-layout"><section class="entry-card">
+  <h1>고객 채팅 입장</h1>
+  <p class="sub">거래소 고객센터에서 받은 일회용 입장 코드를 입력하세요. 재입장할 때는 새 코드가 필요합니다.</p>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/chat/enter" class="stack">
+    <label>입장 코드<input name="entry_code" autocomplete="off" spellcheck="false" maxlength="256" required autofocus></label>
+    <button class="primary" type="submit">상담방 입장</button>
+  </form>
+  <div class="entry-footer"><a href="/">직원 로그인으로 이동</a></div>
+</section></div>
+{% endblock %}

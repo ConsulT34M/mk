@@ -1,0 +1,8 @@
+.git
+.env*
+.local
+.venv
+**/__pycache__
+**/*.wav
+**/*.pem
+**/*.key

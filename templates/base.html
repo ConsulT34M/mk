@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}상담 데스크{% endblock %} · AI TM</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='portal.css') }}">
+  <script defer src="{{ url_for('static', filename='portal.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="bar-inner">
+      <a class="brand" href="{{ url_for('queue_page') if user else url_for('home') }}">
+        <span class="brand-mark" aria-hidden="true"></span><span>AI TM</span>
+      </a>
+      <span class="area">{{ '직원 포털' if user else '고객지원' }}</span>
+      {% if user %}
+      <div class="identity">
+        <span>{{ user.login_id }} <span class="role">{{ '관리자' if user.role == 'ADMIN' else '상담원' }}</span></span>
+        <button class="nav-button" data-logout>로그아웃</button>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+  <main class="container">{% block main %}{% endblock %}</main>
+  <div id="notice" class="notice" role="alert" hidden></div>
+</body>
+</html>
