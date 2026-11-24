@@ -30,9 +30,19 @@ async function api(path, { method = "GET", body, actor } = {}) {
 }
 
 const dateFormat = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
+const ticketClock = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 function formatTimes(root) {
   root.querySelectorAll("time[datetime]").forEach(el => {
-    el.textContent = dateFormat.format(new Date(el.dateTime));
+    const date = new Date(el.dateTime);
+    const fullDate = dateFormat.format(date);
+    if (el.hasAttribute("data-ticket-time")) {
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      el.textContent = month + "." + day + " " + ticketClock.format(date);
+      el.title = fullDate;
+    } else {
+      el.textContent = fullDate;
+    }
   });
 }
 formatTimes(document);

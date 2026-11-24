@@ -28,15 +28,36 @@
   {% if board %}
   <main class="dashboard">
     <div class="board-inner">
-      <h2>대시보드</h2>
-      <div class="board-totals">
-        <div class="total waiting"><span>대기 티켓</span><strong data-total="waiting">{{ tickets|length }}</strong></div>
-        <a class="total" href="{{ url_for('queue_page', tab='desk') }}"><span>내 진행 상담 <i aria-hidden="true">↗</i></span><strong data-total="active">{{ active_count }}</strong></a>
-        <a class="total" href="{{ url_for('queue_page', tab='closed') }}"><span>내 종결 상담 <i aria-hidden="true">↗</i></span><strong data-total="closed">{{ closed_count }}</strong></a>
+      <div class="board-title"><h2>대시보드</h2><span id="metrics-note">예시 데이터</span></div>
+      <div class="board-metrics">
+        <section class="board-panel" aria-labelledby="chat-summary-title" aria-describedby="metrics-note">
+          <h3 id="chat-summary-title">누적 채팅 현황</h3>
+          <div class="chat-breakdown">
+            <div class="chat-donut"><strong>40건</strong></div>
+            <ul class="chat-legend">
+              <li><span class="legend-state waiting">대기</span><span>2건</span><span>5%</span></li>
+              <li><span class="legend-state active">진행</span><span>8건</span><span>20%</span></li>
+              <li><span class="legend-state closed">종결</span><span>30건</span><span>75%</span></li>
+            </ul>
+          </div>
+        </section>
+        <section class="board-panel quota-panel" aria-labelledby="quota-title" aria-describedby="metrics-note">
+          <div class="quota-heading"><h3 id="quota-title">내 배정량</h3><span>배정 / 목표</span></div>
+          <div class="quota-list">
+            {% for period, assigned, goal in [('일간', 6, 8), ('주간', 12, 20), ('월간', 18, 40)] %}
+            <div class="quota-row">
+              <span>{{ period }}</span>
+              <progress value="{{ assigned }}" max="{{ goal }}" aria-label="{{ period }} 배정량" aria-valuetext="목표 {{ goal }}건 중 {{ assigned }}건"></progress>
+              <span class="quota-value">{{ assigned }} / {{ goal }}건</span>
+            </div>
+            {% endfor %}
+          </div>
+        </section>
       </div>
-      <div class="board-heading"><h3>받을 수 있는 티켓</h3><span>접수순</span></div>
-      <p class="board-help">상담 받기를 누르면 내 상담으로 배정됩니다.</p>
-      <div id="live-list" class="ticket-grid">{% include "_tickets.html" %}</div>
+      <section class="board-panel ticket-panel" aria-labelledby="ticket-title">
+        <div class="ticket-heading"><h3 id="ticket-title">대기 상담 요청</h3><span class="count" data-total="waiting">{{ tickets|length }}</span></div>
+        <div id="live-list">{% include "_tickets.html" %}</div>
+      </section>
     </div>
   </main>
   {% else %}
