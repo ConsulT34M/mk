@@ -7,9 +7,11 @@ from flask import g, request
 
 from .db import one, stamp, utcnow
 
+# 직원 포털, 거래소를 통한 채팅 입장, 공개 문의 페이지는 서로 다른 쿠키로 세션을 찾는다.
 STAFF_COOKIE = "tm_staff"
 CHAT_COOKIE = "tm_chat"
 INQUIRY_COOKIE = "__Host-tm_inquiry"
+# 뷰는 업무 오류 코드만 지정한다. HTTP 상태와 사용자에게 표시할 문구는 여기서 짝을 맞춘다.
 ERRORS = {
     "INVALID_INPUT": (400, "입력 항목을 확인해 주세요."),
     "VOICE_NOT_CONFIGURED": (503, "서버에 OpenAI API 키를 설정하면 음성 상담을 시작할 수 있어요."),
@@ -57,12 +59,15 @@ ERRORS = {
 
 class ApiError(Exception):
     def __init__(self, code):
+        # 전역 오류 처리기가 HTML과 JSON 중 요청에 맞는 형식을 고를 때 이 속성들을 사용한다.
         super().__init__(code)
         self.code = code
         self.status, self.message = ERRORS[code]
 
 
 def payload():
+    # JSON 파싱 실패, 빈 본문, 배열 등은 모두 같은 입력 오류로 처리한다.
+    # 반환값이 딕셔너리이므로 이후의 뷰는 필드 이름으로 값을 읽을 수 있다.
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         raise ApiError("INVALID_INPUT")
@@ -70,6 +75,7 @@ def payload():
 
 
 def uuid_field(value):
+    # 폼·JSON·쿼리 문자열로 받은 ID를 검증하고 하이픈이 있는 표준 UUID 문자열로 통일한다.
     if not isinstance(value, str):
         raise ApiError("INVALID_INPUT")
     try:
@@ -79,20 +85,24 @@ def uuid_field(value):
 
 
 def text_field(value, limit=4000):
+    # 원래 입력 길이로 상한을 검사하고 양끝 공백을 제거한다. 공백만 입력한 값도 거절한다.
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ApiError("INVALID_INPUT")
     return value.strip()
 
 
 def digest(value):
+    # 입장 코드나 쿠키 토큰을 DB의 이진 해시 열과 비교할 수 있도록 SHA-256 바이트로 변환한다.
     return hashlib.sha256(value.encode()).digest()
 
 
 def deadline(setting, default):
+    # 환경 설정의 단위는 분이다. DB에 기록할 절대 만료 시각을 현재 UTC 기준으로 계산한다.
     return utcnow() + timedelta(minutes=int(os.getenv(setting, default)))
 
 
 def staff_user(required=True):
+    # 쿠키가 가리키는 세션이 만료되지 않았고 연결된 계정도 활성 상태여야 직원으로 인정한다.
     token = request.cookies.get(STAFF_COOKIE)
     user = None
     if token:
@@ -103,13 +113,17 @@ def staff_user(required=True):
             (digest(token),),
         )
     if user:
+        # g는 현재 앱 컨텍스트에 속한다. 이 요청의 감사 로그와 변경 이력이 같은 직원 ID를 사용한다.
         g.actor = user["staff_id"]
     elif required:
         raise ApiError("STAFF_AUTH_REQUIRED")
+    # 첫 화면처럼 익명 접근을 허용하는 호출은 required=False로 None을 받아 이동할 화면을 결정한다.
     return user
 
 
 def customer_session(cookie_name=CHAT_COOKIE, *, lock=False):
+    # 호출자가 지정한 쿠키로 아직 유효한 고객 세션을 찾는다. 공개 문의 방문 직후에는
+    # 세션 행이 있어도 case_id는 비어 있다. lock=True인 접수 경로는 이 행을 잠가 중복 생성을 막는다.
     token = request.cookies.get(cookie_name)
     if token:
         row = one(
@@ -123,6 +137,7 @@ def customer_session(cookie_name=CHAT_COOKIE, *, lock=False):
 
 
 def admin():
+    # 유효한 직원 세션을 확인한 후 관리자 역할을 요구한다. 성공하면 해당 계정 정보를 돌려준다.
     user = staff_user()
     if user["role"] != "ADMIN":
         raise ApiError("CASE_ACCESS_DENIED")
@@ -130,6 +145,7 @@ def admin():
 
 
 def agent():
+    # 상담원 전용 화면이나 티켓 수락처럼 AGENT 역할이 필요한 처리에서 호출한다.
     user = staff_user()
     if user["role"] != "AGENT":
         raise ApiError("CASE_ACCESS_DENIED")
@@ -137,6 +153,8 @@ def agent():
 
 
 def case_row(case_id, lock=False):
+    # visible_case는 삭제 표시된 티켓을 제외한다. 이어서 상태를 바꾸는 호출자는
+    # FOR UPDATE로 조회해 같은 티켓을 수정하는 다른 트랜잭션과 순서를 맞춘다.
     sql = "SELECT * FROM visible_case WHERE case_id=%s"
     case = one(sql + (" FOR UPDATE" if lock else ""), (case_id,))
     if not case:
@@ -145,6 +163,8 @@ def case_row(case_id, lock=False):
 
 
 def assigned_case(case_id, lock=False):
+    # 직원 개인 데스크의 상세 조회·쓰기에는 현재 담당 상담원만 접근할 수 있다.
+    # DB에서 읽은 현재 배정과 요청 세션의 직원 ID를 대조한다.
     user = staff_user()
     case = case_row(case_id, lock)
     if user["role"] != "AGENT" or case["current_agent_id"] != user["staff_id"]:
@@ -153,22 +173,26 @@ def assigned_case(case_id, lock=False):
 
 
 def writable(case):
+    # 종결 시각이 있는 티켓에 채팅 추가나 일반 상담 내용 수정이 들어오면 업무 오류를 낸다.
     if case["closed_at"]:
         raise ApiError("CASE_READ_ONLY")
 
 
 def channel(case, expected):
+    # 웹 채팅과 전화 응대가 공유하는 티켓에서, 호출한 기능과 실제 접수 채널이 일치하는지 검사한다.
     if case["channel"] != expected:
         raise ApiError("CHANNEL_MISMATCH")
 
 
 def status(case):
+    # 종료 시각을 우선한다. 열린 티켓은 담당자가 있으면 진행 중, 아직 없으면 대기 상태다.
     if case["closed_at"]:
         return "CLOSED"
     return "IN_PROGRESS" if case["current_agent_id"] else "QUEUED"
 
 
 def case_info(case):
+    # 목록과 상세 응답이 공유하는 티켓 필드만 뽑고, DB의 일시를 API에서 쓰는 UTC 문자열로 바꾼다.
     return {
         "case_id": case["case_id"], "channel": case["channel"], "status": status(case),
         "current_agent_id": case["current_agent_id"], "opened_at": stamp(case["opened_at"]),
@@ -178,4 +202,6 @@ def case_info(case):
 
 
 def content_visible(case):
+    # 기한이 설정되지 않았거나 아직 지나지 않았을 때만 본문을 보여 준다.
+    # 정리 작업이 실제 데이터를 삭제하기 전에도 화면과 API에 같은 기한을 적용한다.
     return case["content_expires_at"] is None or case["content_expires_at"] > utcnow()
