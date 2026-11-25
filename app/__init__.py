@@ -1,6 +1,8 @@
 import json
 import os
 import secrets
+import time
+from threading import Thread
 from urllib.request import Request, urlopen
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -19,6 +21,7 @@ from .db import audit, close_db, db as get_db, new_id, one, run, stamp, utcnow
 from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, case_status_breakdown, duration, notices, report_range, statistics
 from .recordings import purge, recordings as recordings_blueprint
 from .voice import voice
+from .voice_summaries import summary_worker
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
@@ -416,3 +419,20 @@ def demo_entry(customer, kind, new_case):
 
 
 app.cli.command("purge")(purge)
+
+
+@app.cli.command("maintain")
+def maintain():
+    """Run retention cleanup and AI call summaries independently."""
+    run_maintenance(app)
+
+
+def run_maintenance(application):
+    Thread(target=summary_worker, args=(application,), daemon=True).start()
+    while True:
+        try:
+            with application.app_context():
+                purge()
+        except Exception:
+            application.logger.exception("Retention cleanup will retry")
+        time.sleep(30)

@@ -6,7 +6,7 @@ Windows Server 2022 x64 한 대에서 IIS 10, Flask, MySQL 8.4를 운영하는 �
 브라우저 → IIS (HTTPS 443) → Waitress / Flask (127.0.0.1:8000) → MySQL (127.0.0.1:3306)
 ```
 
-Windows 서비스 `MKDeskWeb`은 직원·고객 화면을 제공한다. `MKDeskPurge`는 만료된 상담 내용, 녹취와 세션을 30초 간격으로 정리한다. 아래 명령은 대상 서버의 관리자 권한 Windows PowerShell에서 실행한다.
+Windows 서비스 `MKDeskWeb`은 직원·고객 화면을 제공한다. `MKDeskPurge`는 만료된 상담 내용, 녹취와 세션을 30초 간격으로 정리하고, 별도로 새 AI 녹취의 요약 요청을 처리한다. 아래 명령은 대상 서버의 관리자 권한 Windows PowerShell에서 실행한다.
 
 ## 1. 서버와 소스 준비
 
@@ -122,17 +122,16 @@ if (-not $mkSettings.MYSQL_PASSWORD -or -not $mkSettings.PARTNER_TOKEN) { throw 
 $mkSettings | ConvertTo-Json | Set-Content C:\MKDesk\svc\settings.json -Encoding UTF8
 ```
 
-`settings.json`에는 실제 비밀값이 들어간다. 1단계에서 권한을 지정한 `svc` 폴더에 보관한다. AI 음성 사용 시 서버에서 `api.openai.com`으로 HTTPS 접속이 가능해야 한다. 필요하면 `OPENAI_REALTIME_MODEL`도 같은 파일에 문자열로 지정한다. 설정을 변경하면 두 앱 서비스를 다시 시작한다.
+`settings.json`에는 실제 비밀값이 들어간다. 1단계에서 권한을 지정한 `svc` 폴더에 보관한다. AI 음성 사용 시 서버에서 `api.openai.com`으로 HTTPS 접속이 가능해야 한다. 필요하면 통화 모델 `OPENAI_REALTIME_MODEL`과 녹취 요약 모델 `OPENAI_CALL_SUMMARY_MODEL`도 같은 파일에 문자열로 지정한다. 설정을 변경하면 두 앱 서비스를 다시 시작한다.
 
 ## 4. 웹과 만료 정리를 Windows 서비스로 등록
 
-아래 코드를 `C:\MKDesk\svc\run.py`로 저장한다. `web`은 서버 내부에서만 접속할 수 있고, `purge`는 앱의 기존 정리 함수를 사용한다. IIS가 외부 HTTPS를 처리하므로 Waitress가 Flask에 전달하는 요청 스킴은 `https`로 지정한다. [Waitress 프록시 설정](https://docs.pylonsproject.org/projects/waitress/en/latest/reverse-proxy.html)
+아래 코드를 `C:\MKDesk\svc\run.py`로 저장한다. `web`은 서버 내부에서만 접속할 수 있고, `purge`는 만료 정리와 AI 통화 요약 작업을 실행한다. IIS가 외부 HTTPS를 처리하므로 Waitress가 Flask에 전달하는 요청 스킴은 `https`로 지정한다. [Waitress 프록시 설정](https://docs.pylonsproject.org/projects/waitress/en/latest/reverse-proxy.html)
 
 ```python
 import json
 import os
 import sys
-import time
 from pathlib import Path
 
 svc = Path(__file__).resolve().parent
@@ -145,11 +144,8 @@ if sys.argv[1] == "web":
     from waitress import serve
     serve(app, listen="127.0.0.1:8000", url_scheme="https")
 elif sys.argv[1] == "purge":
-    from app.recordings import purge
-    while True:
-        with app.app_context():
-            purge()
-        time.sleep(30)
+    from app import run_maintenance
+    run_maintenance(app)
 else:
     raise SystemExit("web 또는 purge 모드를 지정하세요.")
 ```

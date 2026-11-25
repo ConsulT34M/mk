@@ -72,8 +72,10 @@ def visitor_hash(*, lock=False):
 
 @voice.post("/sessions")
 def start():
-    consent = payload().get("recording_consent", False)
-    if not isinstance(consent, bool):
+    data = payload()
+    consent = data.get("recording_consent", False)
+    summary_consent = data.get("summary_consent", False)
+    if not isinstance(consent, bool) or not isinstance(summary_consent, bool) or (summary_consent and not consent):
         raise ApiError("INVALID_INPUT")
     visitor_hash()
     secret = client_secret()
@@ -84,6 +86,8 @@ def start():
         (voice_id, owner, new_id()))
     if consent:
         reserve_voice(voice_id)
+        if summary_consent:
+            run("INSERT INTO ai_call_summary (recording_id) VALUES (%s)", (voice_id,))
     audit("VOICE_RECORDING_AGREED" if consent else "VOICE_RECORDING_REFUSED", "customer", recording_id=voice_id)
     return {"voice_id": voice_id, "client_secret": secret}, 201
 

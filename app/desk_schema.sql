@@ -31,5 +31,14 @@ CREATE TABLE IF NOT EXISTS voice_policy (
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO voice_policy (policy_id) VALUES (1);
 
+CREATE TABLE IF NOT EXISTS ai_call_summary (
+    recording_id CHAR(36) PRIMARY KEY,
+    state ENUM('QUEUED','PROCESSING','READY','FAILED') NOT NULL DEFAULT 'QUEUED',
+    summary TEXT,
+    error_message VARCHAR(160),
+    FOREIGN KEY (recording_id) REFERENCES recording(recording_id) ON DELETE CASCADE,
+    INDEX (state)
+) ENGINE=InnoDB;
+
 CREATE OR REPLACE VIEW visible_case AS
     SELECT * FROM support_case WHERE deleted_at IS NULL;

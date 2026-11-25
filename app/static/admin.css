@@ -64,6 +64,10 @@
 .admin-btn.danger { color: #9b3d37; }
 .pager { justify-content: flex-end; padding: 5px 9px; font-size: 12px; }
 .refresh-list { font-size: 11px; }
+#ai-calls audio { width: 205px; }
+#ai-calls .call-summary { min-width: 14em; max-width: 42em; text-align: left; white-space: normal; }
+.call-summary p { white-space: pre-line; overflow-wrap: anywhere; }
+.call-summary p + form { margin-top: 4px; }
 .record-context, .message-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 12px; }
 .assignment-log ul { padding-left: 20px; }
 .message-text { white-space: pre-wrap; margin: 4px 0; overflow-wrap: anywhere; }

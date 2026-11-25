@@ -48,8 +48,10 @@ docker compose up -d --build --wait
 1. 로컬 `.env`에 `OPENAI_API_KEY`를 설정하고 `docker compose up -d --build --wait`를 실행합니다. 기본 모델은 `gpt-realtime-2.1-mini`이며 `OPENAI_REALTIME_MODEL`로 변경할 수 있습니다.
 2. [고객센터](https://localhost:8443/inquiry)에서 ‘AI 음성 상담 → 음성 상담 시작’을 누르고 마이크 사용을 허용합니다. Flask가 임시 접속 키를 발급받으면 브라우저와 OpenAI Realtime이 WebRTC로 음성을 주고받습니다. [OpenAI WebRTC 가이드](https://developers.openai.com/api/docs/guides/voice-webrtc?voice-api=realtime)
 3. “상담원 연결해 주세요”라고 말하면 AI의 `request_agent` 도구 호출을 브라우저가 Flask로 전달합니다. Flask는 고객 세션을 확인하고 통화당 한 건의 미배정 전화 티켓을 발행합니다. 고객에게 표시된 번호를 기존 상담원 대시보드에서 확인할 수 있습니다. 이 시연의 인계 범위는 전화 티켓 접수까지입니다.
-4. ‘통화 녹취에 동의합니다’를 선택하면 고객과 AI의 음성을 한 개의 WAV로 저장합니다. ‘음성 상담 종료’를 누르고 저장 안내가 뜨면 [관리자 → AI 상담 녹취](https://localhost:8443/admin?tab=voice-recordings)에서 재생할 수 있습니다. AI로 끝난 통화도 이 목록에 나타나며, 상담원에게 인계한 통화는 해당 티켓에서도 들을 수 있습니다.
+4. ‘통화 녹취와 AI 요약에 동의합니다’를 선택하면 통화를 WAV로 저장합니다. 관리자는 ‘상담 운영 → AI 통화’에서 재생하고 고객 문의·안내·후속 조치 요약을 확인합니다. 새 녹취는 자동으로, 기존 녹취는 ‘요약 생성’을 누른 건만 처리합니다. 요약은 녹취와 함께 만료됩니다. [로컬 AI 통화](https://localhost:8443/admin?tab=ai-calls)
 5. 녹취 선택은 통화마다 기본 해제됩니다. 동의한 통화에서 브라우저가 비정상 종료되면 서버가 받은 부분까지 복구합니다. 마지막 전송으로부터 2분 후 시작되는 정리 주기에 반영됩니다.
+
+요약 작업은 녹취가 저장된 뒤 기존 `OPENAI_API_KEY`로 실행됩니다. 기본 요약 모델은 `gpt-audio-1.5`이며 `OPENAI_CALL_SUMMARY_MODEL`로 변경할 수 있습니다. [OpenAI 음성 입력 가이드](https://developers.openai.com/api/docs/guides/audio-chat-completions)
 
 ## 관리자 페이지 (F07)
 

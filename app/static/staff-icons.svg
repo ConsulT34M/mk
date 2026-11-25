@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg">
   <defs>
+    <symbol id="waveform" viewBox="0 0 24 24"><path d="M3 10v4m4-7v10m5-15v20m5-16v12m4-8v4"/></symbol>
     <symbol id="screen" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="1"/><path d="M12 17v4m-5 0h10"/></symbol>
     <symbol id="menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
     <symbol id="home" viewBox="0 0 24 24"><path d="m2 11 10-8 10 8m-17-1v11h5v-7h4v7h5V10"/></symbol>

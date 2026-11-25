@@ -6,11 +6,10 @@
 {% set active_menu = tab %}
 {% if is_admin %}
   {% set menu = [
-    ('상담 운영', [('overview','대시보드','chart'),('calls','통화','phone'),('chats','채팅','chat')]),
+    ('상담 운영', [('overview','대시보드','chart'),('calls','통화','phone'),('ai-calls','AI 통화','waveform'),('chats','채팅','chat')]),
     ('관리', [('agents','계정 관리','person'),('org','조직','team'),('notices','공지사항','notice'),('ai','AI 설정','settings'),('audit','변경 이력','history')])
   ] %}
   {% if tab=='quotas' %}{% set active_menu='agents' %}
-  {% elif tab=='voice-recordings' %}{% set active_menu='calls' %}
   {% elif tab=='history' %}{% set active_menu='chats' if (detail and detail.channel=='WEB') or (not detail and selected=='WEB') else 'calls' %}{% endif %}
 {% else %}
   {% set menu = [

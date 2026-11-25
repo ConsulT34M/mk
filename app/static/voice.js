@@ -172,7 +172,8 @@
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       const signal = call.controller.signal;
-      const access = await api(sessions, {method: "POST", body: {recording_consent: Boolean(call.recorder)}, signal});
+      const record = Boolean(call.recorder);
+      const access = await api(sessions, {method: "POST", body: {recording_consent: record, summary_consent: record}, signal});
       call.id = access.voice_id;
       if (active !== call) { releaseSession(call.id).catch(() => {}); return; }
       const answer = await fetch("https://api.openai.com/v1/realtime/calls", {

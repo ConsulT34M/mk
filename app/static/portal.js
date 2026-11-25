@@ -219,6 +219,13 @@ document.addEventListener("submit", async event => {
         await api(form.action, {method: "POST", body: values});
         tell("문의 유형을 저장했습니다.");
         break;
+      case "ai-summary": {
+        const result = await api(form.action, { method: "POST", body: {} });
+        if (result.state === "QUEUED" || result.state === "PROCESSING") {
+          form.parentElement.textContent = result.state === "QUEUED" ? "요약 대기" : "요약 중";
+        }
+        break;
+      }
       case "phone": {
         const update = Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ""));
         if (update.call_at) update.call_at = new Date(update.call_at).toISOString();
@@ -254,7 +261,7 @@ document.addEventListener("submit", async event => {
         break;
     }
   } catch (error) {
-    if (action === "admin" && error.status === 401) location.assign("/");
+    if ((action === "admin" || action === "ai-summary") && error.status === 401) location.assign("/");
     else tell(error.message);
   } finally {
     delete form.dataset.busy;
@@ -272,7 +279,31 @@ if (document.querySelector(".admin-desk")) {
 }
 
 const adminDashboard = $("#admin-dashboard");
-if (adminDashboard) {
+const aiCalls = $("#ai-calls");
+function updateCallRows(next) {
+  const body = aiCalls.querySelector("tbody");
+  const previous = new Map([...body.rows].map(row => [row.id, row]));
+  let following = null;
+  // Keep the audio element and any open recording editor when its summary changes.
+  for (const row of [...next.querySelector("tbody").rows].reverse()) {
+    const existing = previous.get(row.id);
+    if (existing) {
+      const cell = existing.querySelector(".call-summary");
+      const replacement = row.querySelector(".call-summary");
+      if (cell && !cell.querySelector("[data-busy]") && !cell.isEqualNode(replacement)) cell.replaceWith(replacement);
+      previous.delete(row.id);
+    } else {
+      body.insertBefore(row, following);
+    }
+    following = existing || row;
+  }
+  previous.forEach(row => {
+    row.querySelector("audio")?.pause();
+    row.remove();
+  });
+  aiCalls.querySelector(".count").textContent = next.querySelector(".count").textContent;
+}
+if (adminDashboard || aiCalls) {
   const syncStatus = $("#admin-sync-status");
   let loading = false;
   async function refreshDashboard() {
@@ -283,9 +314,14 @@ if (adminDashboard) {
       if (response.redirected || response.status === 403) { location.replace("/"); return; }
       if (!response.ok) throw new Error();
       const page = new DOMParser().parseFromString(await response.text(), "text/html");
-      const next = page.getElementById("admin-dashboard");
+      const next = page.getElementById((adminDashboard || aiCalls).id);
       if (!next) throw new Error();
       syncStatus.textContent = "";
+      if (aiCalls) {
+        formatTimes(next);
+        updateCallRows(next);
+        return;
+      }
       // Keep an administrator's pending choice intact when another ticket changes.
       const choosing = [...adminDashboard.querySelectorAll(".assign-form")].some(form =>
         form.elements.new_agent_id.value !== form.elements.previous_agent_id.value);
@@ -298,7 +334,7 @@ if (adminDashboard) {
       formatTimes(next);
       if (!adminDashboard.isEqualNode(next)) adminDashboard.replaceChildren(...next.childNodes);
     } catch {
-      syncStatus.textContent = "대시보드 연결 중…";
+      syncStatus.textContent = aiCalls ? "통화 내역 연결 중…" : "대시보드 연결 중…";
     } finally {
       loading = false;
     }
@@ -310,6 +346,6 @@ if (adminDashboard) {
 document.querySelectorAll("input[type=file]").forEach(input => input.addEventListener("change", () => {
   delete input.form.dataset.requestId;
 }));
-document.querySelectorAll("audio").forEach(audio => audio.addEventListener("error", () => {
-  tell("녹취를 재생할 수 없습니다. 배정 상태와 보관 기한을 확인해 주세요.");
-}));
+document.addEventListener("error", event => {
+  if (event.target instanceof HTMLAudioElement) tell("녹취를 재생할 수 없습니다. 배정 상태와 보관 기한을 확인해 주세요.");
+}, true);

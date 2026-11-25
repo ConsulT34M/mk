@@ -1,4 +1,5 @@
 """Run inside the disposable app container with MySQL. OpenAI is mocked throughout."""
+import base64
 import io
 import json
 import os
@@ -8,7 +9,7 @@ from importlib import import_module
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from app import app, recording_store
+from app import app, recording_store, voice_summaries
 from app.common import INQUIRY_COOKIE
 from app.db import db, one, run
 from app.recordings import purge
@@ -74,23 +75,33 @@ def test_voice_recordings():
     for client, login, password in [(admin, "admin", os.environ["DEMO_ADMIN_PASSWORD"]), (agent, "test", "test")]:
         assert client.post("/staff/sessions", json={"login_id": login, "password": password}).status_code == 200
     base = "/inquiry/voice/sessions"
-    pcm = bytes(range(32)) * 256
+    pcm = bytes(range(32)) * 1024
 
-    def start(consent):
+    def start(consent, summarize=False):
         with patch.object(import_module("app.voice"), "urlopen", return_value=io.BytesIO(b'{"value":"test"}')), \
                 patch.dict(os.environ, OPENAI_API_KEY="fixture-only"):
-            result = visitor.post(base, json={"recording_consent": consent})
+            result = visitor.post(base, json={"recording_consent": consent, "summary_consent": summarize})
         assert result.status_code == 201
         return result.json["voice_id"]
 
     def push(client, rid, offset=0, data=pcm):
         return client.post(f"{base}/{rid}/recording/{offset}", data=data, content_type="application/octet-stream")
 
+    note = "고객 문의 · 테스트\nAI 안내 · 예시 안내\n후속 조치 · 확인되지 않음"
+    def complete(request, **options):
+        assert request.full_url == "https://api.openai.com/v1/chat/completions"
+        params = json.loads(request.data)
+        assert params["modalities"] == ["text"] and params["store"] is False
+        answer = {"choices": [{"finish_reason": "stop", "message": {"content": note}}]}
+        return io.BytesIO(json.dumps(answer).encode())
+
+    assert visitor.post(base, json={"recording_consent": False, "summary_consent": True}).status_code == 400
     refused = start(False)
     assert push(visitor, refused).json["code"] == "RECORDING_CONSENT_REQUIRED"
     assert visitor.post(f"{base}/{refused}/end", json={}).status_code == 204
+    assert admin.post(f"/admin/voice-recordings/{refused}/summary", json={}).status_code == 404
     for handoff in (False, True):
-        rid = start(True)
+        rid = start(True, summarize=handoff)
         session = f"{base}/{rid}"
         clip = f"/admin/voice-recordings/{rid}/audio"
         assert push(other, rid).status_code == 404
@@ -105,6 +116,34 @@ def test_voice_recordings():
             assert visitor.post(session + "/end", json={}).status_code == 503
         assert visitor.post(session + "/end", json={}).json == {"recorded": True}
         assert visitor.post(session + "/end", json={}).status_code == 204
+        summary_url = clip[:-6] + "/summary"
+        assert other.post(summary_url, json={}).status_code == 401
+        assert agent.post(summary_url, json={}).status_code == 403
+        with app.app_context():
+            queued = one("SELECT state FROM ai_call_summary WHERE recording_id=%s", (rid,))
+            assert queued == ({"state": "QUEUED"} if handoff else None)
+        if not handoff:
+            assert admin.post(summary_url, json={}).status_code == 202
+            assert admin.post(summary_url, json={}).json["state"] == "QUEUED"
+            with app.app_context(), patch.dict(os.environ, OPENAI_API_KEY=""):
+                assert voice_summaries.process_next_summary()
+            assert "다시 시도" in admin.get("/admin?tab=ai-calls").get_data(as_text=True)
+            assert admin.post(summary_url, json={}).status_code == 202
+        with app.app_context(), patch.dict(os.environ, OPENAI_API_KEY="fixture-only"), \
+                patch.object(voice_summaries, "CHUNK_SECONDS", 1), patch.object(voice_summaries, "urlopen", side_effect=complete) as upstream:
+            assert voice_summaries.process_next_summary()
+            assert not voice_summaries.process_next_summary()
+            parts = []
+            for i, call in enumerate(upstream.call_args_list):
+                messages = json.loads(call.args[0].data)["messages"]
+                if i:
+                    assert messages[-2] == {"role": "assistant", "content": note}
+                encoded = messages[-1]["content"][-1]["input_audio"]["data"]
+                with wave.open(io.BytesIO(base64.b64decode(encoded))) as wav:
+                    parts.append(wav.readframes(wav.getnframes()))
+            assert len(parts) > 1 and b"".join(parts) == pcm + pcm
+        assert admin.post(summary_url, json={}).status_code == 200
+        assert note in admin.get("/admin?tab=ai-calls").get_data(as_text=True)
         label = "AI 상담 " + rid[:8]
         assert admin.post(clip[:-6], json={"label": label}).status_code == 200
         listing = admin.get("/admin?tab=voice-recordings").data
@@ -134,8 +173,12 @@ def test_voice_recordings():
             assert admin.post(clip[:-6], json={"operation": "delete"}).status_code == 200
         assert admin.get(clip).status_code == 410
         assert clip.encode() not in admin.get("/admin?tab=voice-recordings").data
+        assert admin.post(summary_url, json={}).status_code in (404, 410)
+        with app.app_context():
+            purge()
+            assert one("SELECT 1 FROM ai_call_summary WHERE recording_id=%s", (rid,)) is None
 
-    rid = start(True)
+    rid = start(True, summarize=True)
     assert push(visitor, rid).status_code == 204
     assert admin.post(f"/admin/voice-recordings/{rid}", json={"label": "만료 테스트"}).status_code == 200
     with app.app_context():
@@ -143,8 +186,15 @@ def test_voice_recordings():
         db().commit()
         purge()
         assert one("SELECT state FROM recording WHERE recording_id=%s", (rid,))["state"] == "READY"
-        run("UPDATE recording SET expires_at=UTC_TIMESTAMP(6) WHERE recording_id=%s", (rid,))
-        db().commit()
+        def expire_during_summary(*args, **kwargs):
+            with app.app_context():
+                assert not voice_summaries.process_next_summary()
+                run("UPDATE recording SET expires_at=UTC_TIMESTAMP(6) WHERE recording_id=%s", (rid,))
+                db().commit()
+            return complete(*args, **kwargs)
+        with patch.dict(os.environ, OPENAI_API_KEY="fixture-only"), patch.object(voice_summaries, "urlopen", side_effect=expire_during_summary):
+            assert voice_summaries.process_next_summary()
+        assert one("SELECT summary FROM ai_call_summary WHERE recording_id=%s", (rid,))["summary"] is None
     assert admin.get(f"/admin/voice-recordings/{rid}/audio").status_code == 410
     with app.app_context():
         purge()
@@ -157,3 +207,4 @@ if __name__ == "__main__":
     test_voice_recordings()
     print("PASS voice setup errors, visitor isolation, concurrent handoff, phone queue and session end")
     print("PASS consent, isolated/retried PCM, WAV playback and audit, AI-only and handed-off recordings, recovery and expiry")
+    print("PASS AI summary opt-in, manual legacy requests, permissions, multi-part audio, retry, concurrent workers and expiry")

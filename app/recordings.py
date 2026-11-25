@@ -175,4 +175,6 @@ def purge():
         db().commit()
     for table in ("entry_code", "customer_session", "staff_session"):
         run(f"DELETE FROM {table} WHERE expires_at<=UTC_TIMESTAMP(6)")
+    run("DELETE s FROM ai_call_summary s JOIN recording r ON r.recording_id=s.recording_id "
+        "WHERE r.state IN ('DELETE_PENDING','DESTROYED','FAILED') OR (r.state='READY' AND r.expires_at<=UTC_TIMESTAMP(6))")
     db().commit()

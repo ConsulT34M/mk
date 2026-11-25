@@ -18,6 +18,7 @@ services:
       PARTNER_TOKEN: ${PARTNER_TOKEN:?Run python setup_demo.py first}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-}
+      OPENAI_CALL_SUMMARY_MODEL: ${OPENAI_CALL_SUMMARY_MODEL:-gpt-audio-1.5}
       DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:?Run python setup_demo.py first}
       DEMO_AGENT1_PASSWORD: ${DEMO_AGENT1_PASSWORD:?Run python setup_demo.py first}
       DEMO_AGENT2_PASSWORD: ${DEMO_AGENT2_PASSWORD:?Run python setup_demo.py first}

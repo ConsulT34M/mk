@@ -14,6 +14,10 @@ def _path(key):
     return Path(current_app.config["RECORDING_DIR"]) / key
 
 
+def open_audio(key):
+    return _path(key).open("rb")
+
+
 def put_audio(key, source):
     path = _path(key)
     path.parent.mkdir(parents=True, exist_ok=True)

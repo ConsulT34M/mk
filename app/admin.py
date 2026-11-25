@@ -11,6 +11,7 @@ from .common import ApiError, admin, case_info, case_row, channel, content_visib
 from .db import admin_change, db, new_id, one, rows, run, stamp, utcnow
 from .desk_reports import channel_metrics, dashboard_charts, midnight, notices, report_range, statistics, today
 from .recordings import check_expiry, purge_case_content, stream_recording
+from .voice_summaries import call_list
 
 management = Blueprint("management", __name__, url_prefix="/admin")
 PERIODS = (("daily", "일간"), ("weekly", "주간"), ("monthly", "월간"))
@@ -170,13 +171,9 @@ def index():
         selected = request.args.get("edit")
         if selected:
             return redirect(url_for("management.index", tab="agents", filter="all", edit=selected))
-    elif tab == "voice-recordings":
-        data["clips"] = rows(
-            "SELECT r.recording_id,r.case_id,r.stored_at,r.expires_at,r.label FROM recording r "
-            "LEFT JOIN support_case c ON c.case_id=r.case_id "
-            "WHERE r.uploaded_by IS NULL AND r.state='READY' AND r.expires_at>UTC_TIMESTAMP(6) AND c.deleted_at IS NULL "
-            "ORDER BY r.stored_at DESC,r.recording_id"
-        )
+    elif tab in ("ai-calls", "voice-recordings"):
+        tab = "ai-calls"
+        data["clips"] = call_list()
     elif tab == "audit":
         page = max(1, min(request.args.get("page", 1, type=int), 2**31 - 1))
         changes = rows(
@@ -535,6 +532,28 @@ def play_voice(recording_id):
     if not item:
         raise ApiError("RECORDING_NOT_FOUND")
     return stream_recording(item)
+
+
+@management.post("/voice-recordings/<uuid:recording_id>/summary")
+def request_voice_summary(recording_id):
+    item = one("SELECT r.case_id,r.state,r.expires_at,c.deleted_at FROM recording r "
+               "LEFT JOIN support_case c ON c.case_id=r.case_id WHERE r.recording_id=%s AND r.uploaded_by IS NULL FOR UPDATE",
+               (recording_id,))
+    if not item or item["deleted_at"]:
+        raise ApiError("RECORDING_NOT_FOUND")
+    check_expiry(item)
+    if item["state"] != "READY":
+        raise ApiError("RECORDING_NOT_READY")
+    previous = one("SELECT state FROM ai_call_summary WHERE recording_id=%s", (recording_id,))
+    state = previous["state"] if previous else None
+    if state in (None, "FAILED"):
+        run("INSERT INTO ai_call_summary (recording_id) VALUES (%s) ON DUPLICATE KEY UPDATE state='QUEUED',error_message=NULL",
+            (recording_id,))
+        admin_change("AI 통화 요약 요청", recording_id, item["case_id"])
+        state = "QUEUED"
+    if not request.is_json:
+        return redirect(url_for("management.index", tab="ai-calls", _anchor="clip-" + recording_id), code=303)
+    return {"state": state}, 200 if state == "READY" else 202
 
 
 @management.post("/voice-recordings/<uuid:recording_id>", defaults={"case_id": None})
