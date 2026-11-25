@@ -1,64 +1,59 @@
-{% extends "base.html" %}
-{% block title %}{{ '대시보드' if tab == 'dashboard' else '상담 데스크' }}{% endblock %}
-{% block styles %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='prototype/desk.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='agent.css') }}"><link rel="stylesheet" href="{{ url_for('static',filename='admin.css') }}"><link rel="stylesheet" href="{{ url_for('static',filename='desk-operations.css') }}">
-{% endblock %}
+{% extends "staff.html" %}
+{% set titles={'dashboard':'대시보드','calls':'내 상담','chats':'내 상담','desk':'내 상담','closed':'종결 상담','notices':'공지사항','stats':'상담 통계','recordings':'통화 내역·녹취'} %}
+{% block title %}{{ titles[tab] }} · 상담원 데스크{% endblock %}
+{% block heading %}{{ titles[tab] }}{% endblock %}
+{% block heading_actions %}<span id="sync-status" class="sync-status" role="status"></span>{% endblock %}
 {% block scripts %}{% if tab in ('dashboard','desk','closed','calls','chats') %}<script defer src="{{ url_for('static', filename='agent.js') }}"></script>{% endif %}{% endblock %}
-{% block layout %}
-{% set board = tab == 'dashboard' %}
-<div class="desk {{ 'board-desk' if tab in ('dashboard','notices','stats','recordings') }}" id="desk" data-tab="{{ tab }}" data-pane="{{ 'chat' if explicit_case else 'list' }}" data-selected="{{ selected_id or '' }}" {% if detail and detail.content_expired %}data-content-expired{% endif %}>
-  <aside class="rail" aria-label="상담원 메뉴">
-    <img class="rail-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">
-    <nav aria-label="상담 데스크">
-      {% for key, label, icon in [('dashboard','대시보드','dashboard-icon'),('calls','내 상담 · 통화','phone-icon'),('chats','내 상담 · 채팅','chat-icon'),('closed','종결 상담','archive-icon'),('recordings','통화 내역·녹취','phone-icon'),('stats','통계','quota-icon'),('notices','공지사항','archive-icon')] %}
-      <a class="nav-item" href="{{ url_for('queue_page', tab=key) }}" title="{{ label }}" aria-label="{{ label }}" {% if tab == key %}aria-current="page"{% endif %}>
-        <i class="icon {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span>
-        {% if key == 'dashboard' and tickets is defined %}<small class="nav-count" data-total="waiting" aria-label="대기 티켓">{{ tickets|length }}</small>{% endif %}
-      </a>
-      {% endfor %}
-    </nav>
-    <div class="profile"><span class="agent-avatar">{{ user.login_id[:2]|upper }}</span><div><strong>{{ user.display_name or user.login_id }}</strong><small>상담원</small></div></div>
-  </aside>
-  <header class="topbar">
-    <h1><img class="compact-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">상담 데스크</h1>
-    <span id="sync-status" role="status"></span>
-    <button type="button" class="logout" data-logout>로그아웃</button>
-  </header>
-  {% if board %}
-  <main class="dashboard">
-    <div class="board-inner">
-      <div class="board-title"><h2>대시보드</h2></div>
-      <div class="board-metrics">
-        <section class="board-panel" aria-labelledby="chat-summary-title" aria-describedby="metrics-note">
-          <div class="quota-heading"><h3 id="chat-summary-title">누적 채팅 현황</h3><span id="metrics-note">공용 대기 · 소속 팀 상담</span></div>
-          <div id="live-chart">{% include "_chat_chart.html" %}</div>
-        </section>
-        <section class="board-panel quota-panel" aria-labelledby="quota-title">
-          <div class="quota-heading"><h3 id="quota-title">내 배정량</h3><span>처리 / 목표</span></div>
-          <div class="quota-list" id="live-quota">{% include "_quota_rows.html" %}</div>
-        </section>
-      </div>
-      <section class="board-panel ticket-panel" aria-labelledby="ticket-title">
-        <div class="ticket-heading"><h3 id="ticket-title">대기 상담 요청</h3><span class="count" data-total="waiting">{{ tickets|length }}</span></div>
-        <div id="live-list">{% include "_tickets.html" %}</div>
-      </section>
-      <section class="board-panel ticket-panel"><div class="section-title"><h3>최근 공지</h3><a href="{{ url_for('queue_page',tab='notices') }}">전체 보기 →</a></div><div id="live-notices">{% include '_notices.html' %}</div></section>
-    </div>
-  </main>
-  {% elif tab in ('notices','stats','recordings') %}{% include '_agent_operations.html' %}
-  {% else %}
-  <section class="inbox" aria-labelledby="inbox-title">
-    <div class="inbox-head">
-      <div class="title-line"><h2 id="inbox-title">{{ '종결 상담' if tab == 'closed' else '내 통화' if tab=='calls' else '내 채팅' if tab=='chats' else '내 상담' }}</h2><span class="count" data-total="{{ 'closed' if tab == 'closed' else 'active' }}">{{ items|length }}</span></div>
-      <label class="search"><i class="icon search-icon" aria-hidden="true"></i><input id="inbox-search" type="search" aria-label="상담 검색" placeholder="상담 번호, 채널, 내용 검색"></label>
-    </div>
-    <div class="case-list"><div id="live-list">{% include "_inbox.html" %}</div><p class="empty" id="no-matches" hidden>검색 결과가 없습니다.</p></div>
+{% block desk_content %}
+{% if tab=='dashboard' %}
+  <div class="board-metrics">
+    <section class="board-panel" aria-labelledby="case-summary-title">
+      <div class="section-title"><h3 id="case-summary-title">전체 상담 현황</h3><small>모든 팀 · 통화·채팅 누적</small></div>
+      <div id="live-chart">{% include "_case_chart.html" %}</div>
+    </section>
+    <section class="board-panel" aria-labelledby="quota-title">
+      <div class="section-title"><h3 id="quota-title">내 배정량</h3><small>처리 / 목표</small></div>
+      <div class="quota-list" id="live-quota">{% include "_quota_rows.html" %}</div>
+    </section>
+  </div>
+  <section class="board-panel" aria-labelledby="ticket-title">
+    <div class="section-title"><h3 id="ticket-title">대기 상담 요청</h3><span class="count"><span data-total="waiting">{{ tickets|length }}</span>건</span></div>
+    <div class="table-scroll" id="live-list">{% include "_tickets.html" %}</div>
   </section>
-  {% if case %}{% include "_agent_case.html" %}{% else %}
-  <main class="workspace vacant"><p>선택한 상담이 없습니다.</p><a href="{{ url_for('queue_page', tab='dashboard') }}">대기 티켓 보기 →</a></main>
-  <aside class="inspector"><h2>상담 상세</h2><p class="empty">상담을 선택하면 정보가 표시됩니다.</p></aside>
+  <section class="board-panel"><div class="section-title"><h3>최근 공지</h3><a href="{{ url_for('queue_page',tab='notices') }}">전체 보기</a></div><div id="live-notices">{% include '_notices.html' %}</div></section>
+{% elif tab in ('notices','stats','recordings') %}
+  {% include '_agent_operations.html' %}
+{% else %}
+  {% if tab!='closed' %}
+  <nav class="channel-tabs" aria-label="내 상담 채널">
+    {% for key,label in [('calls','통화 상담'),('chats','채팅 상담')] %}
+    <a href="{{ url_for('queue_page',tab=key,status=list_status) }}" {% if tab==key %}aria-current="page"{% endif %}>{{ staff_icon('phone' if key=='calls' else 'chat') }}{{ label }}</a>
+    {% endfor %}
+  </nav>
   {% endif %}
+  <div class="case-grid">
+    <section class="board-panel inbox" aria-labelledby="inbox-title">
+      <header class="section-title"><h3 id="inbox-title">{{ staff_icon('list') }}{{ '종결 상담 목록' if tab=='closed' else '내 통화 목록' if tab=='calls' else '내 채팅 목록' if tab=='chats' else '내 상담 목록' }}</h3><span class="count"><span data-total="listed">{{ items|length }}</span>건</span></header>
+      <div class="inbox-tools">
+        {% if tab in ('calls','chats') %}
+        <form method="get" class="inbox-filter"><input type="hidden" name="tab" value="{{ tab }}"><label>상태
+          <select name="status">{% for key,label in [('all','전체'),('active','진행 중'),('closed','종결')] %}<option value="{{ key }}" {% if list_status==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><button>조회</button></form>
+        {% endif %}
+        <input id="inbox-search" type="search" aria-label="상담 검색" placeholder="상담 번호·내용 검색">
+      </div>
+      <div class="inbox-columns" aria-hidden="true"><span>접수 일시</span><span>문의 내용</span><span>상태</span></div>
+      <div class="case-list"><div id="live-list">{% include "_inbox.html" %}</div><p class="empty" id="no-matches" hidden>검색 결과가 없습니다.</p></div>
+      {% if tab!='closed' %}<div class="inbox-totals">진행 중 <span data-total="active">{{ active_count }}</span>건　│　종결 <span data-total="channel_closed">{{ channel_closed_count }}</span>건</div>{% endif %}
+    </section>
+    {% if case %}{% include "_agent_case.html" %}{% else %}
+    <section class="board-panel case-work vacant"><div class="section-title"><h3>{{ '전화 응대 기록' if tab=='calls' else '상담 대화' if tab=='chats' else '상담 상세' }}</h3></div><p class="empty">선택한 상담이 없습니다.</p></section>
+    {% endif %}
+  </div>
+  {% if tab!='closed' %}
+  <section class="board-panel"><div class="section-title"><h3>{{ staff_icon('history') }}내 상담 이력</h3><a href="{{ url_for('queue_page',tab='closed') }}">종결 상담 전체 보기</a></div>
+    <div class="table-scroll" id="live-history">{% include '_agent_history.html' %}</div>
+  </section>
   {% endif %}
-</div>
+  <section class="board-panel"><div class="section-title"><h3>최근 공지</h3><a href="{{ url_for('queue_page',tab='notices') }}">전체 보기</a></div><div id="live-notices">{% include '_notices.html' %}</div></section>
+{% endif %}
 {% endblock %}

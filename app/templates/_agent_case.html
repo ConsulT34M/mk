@@ -1,13 +1,11 @@
 {% set web = case.channel == 'WEB' %}
 {% set closed = case.status == 'CLOSED' %}
-<main class="workspace">
-  <section class="thread {{ 'phone-thread' if not web else '' }}" {% if web %}data-chat data-id="{{ case.case_id }}" data-actor="staff"{% endif %}>
-    <header class="thread-head">
-      <a class="mobile-back icon-button" href="{{ url_for('queue_page', tab=tab) }}" aria-label="상담 목록으로">‹</a>
-      <span class="avatar" data-tone="{{ 'lavender' if web else 'mint' }}"><i class="icon {{ 'chat-icon' if web else 'phone-icon' }}" aria-hidden="true"></i></span>
-      <div class="who"><div class="name-line"><h2>{{ '웹채팅 상담' if web else '전화 상담' }}</h2><span class="status" data-state="{{ '종결' if closed else '진행 중' }}" data-chat-state>{{ '종결' if closed else '진행 중' }}</span></div><p>#{{ case.case_id[:8]|upper }}</p></div>
-      <button class="info-toggle" type="button" id="show-info" aria-expanded="false" aria-controls="inspector">상담 정보</button>
-    </header>
+<section class="case-work board-panel">
+  <div class="thread" {% if web %}data-chat data-id="{{ case.case_id }}" data-actor="staff"{% endif %}>
+    <header class="section-title thread-head"><a class="mobile-back" href="{{ url_for('queue_page',tab=tab,status=list_status) }}">‹ 목록</a>
+      <h3>{{ staff_icon('chat' if web else 'edit') }}{{ '웹채팅 상담' if web else '전화 응대 기록' }}</h3><span class="case-ref">#{{ case.case_id[:8]|upper }}</span></header>
+    <dl class="record-facts"><dt>접수 일시</dt><dd><time datetime="{{ case.opened_at }}">{{ case.opened_at[:16]|replace('T',' ') }}</time></dd><dt>상담 상태</dt><dd><span class="state-pill {{ 'closed' if closed else 'in_progress' }}" data-chat-state>{{ '종결' if closed else '진행 중' }}</span></dd>
+      <dt>문의 유형</dt><dd>{{ topic_names.get(case.inquiry_type,'미분류') }}</dd><dt>담당 상담원</dt><dd>{{ user.display_name or user.login_id }}</dd></dl>
     {% if web %}
     <div class="thread-body">
       <div class="desk-messages" data-messages role="log" aria-label="상담 대화" aria-live="polite"></div>
@@ -16,18 +14,16 @@
     <form class="composer chat-compose" method="post" action="{{ url_for('cases.messages', case_id=case.case_id) }}" data-action="message" data-id="{{ case.case_id }}">
       <textarea id="chat-message" name="body" rows="2" maxlength="4000" aria-label="답변 입력" placeholder="{{ '종결된 상담입니다.' if closed else '고객에게 보낼 답변을 입력하세요' }}" required {% if closed %}disabled{% endif %}></textarea>
       <div class="compose-tools">
-        {% if not closed %}<details class="replies"><summary class="quick-toggle"><i class="icon chat-icon" aria-hidden="true"></i>빠른 답변</summary>
+        {% if not closed %}<details class="replies"><summary class="quick-toggle">빠른 답변</summary>
           <div class="reply-options"><button type="button">안녕하세요. 문의 내용을 확인하고 안내드리겠습니다.</button><button type="button">추가로 궁금하신 점이 있으면 말씀해 주세요.</button></div>
         </details>{% endif %}
-        <button class="send" type="submit" {% if closed %}disabled{% endif %}>전송 <span aria-hidden="true">↑</span></button>
+        <button class="send" type="submit" {% if closed %}disabled{% endif %}>전송</button>
       </div>
     </form>
     {% else %}{% include "_phone.html" %}{% endif %}
-  </section>
-</main>
-<button class="shade" id="shade" type="button" aria-label="상담 정보 닫기" hidden></button>
-<aside class="inspector" id="inspector" aria-label="상담 상세 정보">
-  <div class="detail-heading"><h2>상담 상세</h2><button type="button" id="close-info" class="icon-button" aria-label="상담 정보 닫기">×</button></div>
+
+  </div>
+  <details class="case-inspector" id="inspector"><summary>상담 상세 · 처리 결과</summary><div class="inspector-content">
   <details open><summary>고객 정보</summary><div class="card-body">
     {% if detail.customer_ref %}<small>고객 참조번호</small><p class="customer-ref">{{ detail.customer_ref }}</p>
     {% else %}<p class="muted">등록된 고객 참조번호가 없습니다.</p>{% endif %}
@@ -55,4 +51,5 @@
     {% for change in detail.assignments %}<li>{{ change.login_id ~ ' 배정' if change.login_id else '배정 해제' }}<small><time datetime="{{ change.at }}">{{ change.at[:16] }}</time></small></li>{% endfor %}
     {% if closed %}<li>상담 종결<small><time datetime="{{ case.closed_at }}">{{ case.closed_at[:16] }}</time></small></li>{% endif %}
   </ol></details>
-</aside>
+  </div></details>
+</section>

@@ -1,17 +1,36 @@
 {% from "_desk_reports.html" import pie %}
+<form class="report-filter dashboard-filter" method="get">
+  <input type="hidden" name="tab" value="overview"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="{{ unit }}" value="{{ month if unit=='month' else day }}">
+  <label>접수 채널 <select name="channel"><option value="">전체 채널</option>{% for key,label in [('PHONE','통화'),('WEB','채팅')] %}<option value="{{ key }}" {% if selected==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <label>목록 상태 <select name="status"><option value="ALL">전체 상태</option>{% for key,label in states.items() %}<option value="{{ key }}" {% if status_filter==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <button class="admin-primary">조회</button><small>누적 상담 기준 · 한국 시간</small>
+</form>
+<div class="channel-kpis overview-kpis" aria-label="누적 상담 현황">
+  {% for key,label in [('ALL','전체 상담'),('QUEUED','배정 대기'),('IN_PROGRESS','진행 중'),('CLOSED','종결')] %}
+  <a class="metric metric-{{ key|lower }}" href="{{ url_for('management.index',tab='overview',channel=selected or '',status=key,unit=unit,day=day,month=month,_anchor='tickets') }}">
+    <span class="metric-name">{{ label }}</span><span class="metric-body"><strong>{{ channel_count if key=='ALL' else counts[key] }}</strong>건 <small>통화 {{ breakdown[(key,'PHONE')] }} · 채팅 {{ breakdown[(key,'WEB')] }}</small></span>
+  </a>{% endfor %}
+</div>
 <div class="board-metrics ops-charts">
-  <section class="board-panel"><div class="section-title"><h3>문의 유형</h3><nav class="switches" aria-label="조회 단위">
-    {% for key,label in [('day','일별'),('month','월별')] %}<a href="{{ url_for('management.index', unit=key, day=day, month=month, status=status_filter, channel=request.args.get('channel')) }}" {% if unit==key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav></div>
-    <form class="report-filter" method="get"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="status" value="{{ status_filter }}"><input type="hidden" name="channel" value="{{ request.args.get('channel', '') }}">
-    <input aria-label="문의 유형 조회 기간" type="{{ 'month' if unit=='month' else 'date' }}" name="{{ unit }}" value="{{ month if unit=='month' else day }}" max="{{ today.isoformat()[:7] if unit=='month' else today }}" required>
-    <button class="admin-btn">조회</button><span class="count">총 {{ topics.total }}건</span></form>{{ pie(topics) }}</section>
-  <section class="board-panel"><div class="section-title"><h3>시간대별 접수</h3><span class="count">오늘 {{ arrivals }}건</span></div>
-    <p class="bar-key"><span>웹채팅</span><span>통화</span> · 한국 시간</p>
-    <svg class="hour-chart" viewBox="0 0 480 148" role="img" aria-label="오늘 시간대별 웹채팅과 통화 접수, 총 {{ arrivals }}건">
-      {% for h in [19,49,79,109] %}<line x1="2" x2="478" y1="{{ h }}" y2="{{ h }}" stroke="#e6e5ed"/>{% endfor %}
-      {% for s in slots %}{% set bar=loop.index0*20+4 %}{% set a=s.web*81/peak %}{% set b=s.phone*81/peak %}
-      <g><title>{{ loop.index0 }}시 · 웹채팅 {{ s.web }}건, 통화 {{ s.phone }}건</title><rect x="{{ bar }}" y="{{ 109-b }}" width="12" height="{{ b }}" fill="#dbb559"/><rect x="{{ bar }}" y="{{ 109-a-b }}" width="12" height="{{ a }}" fill="#6459b4"/>
-      {% if a+b %}<text x="{{ bar+6 }}" y="{{ 105-a-b }}" text-anchor="middle" font-size="12">{{ s.web+s.phone }}</text>{% endif %}
-      {% if loop.index0%3==0 %}<text x="{{ bar+6 }}" y="129" text-anchor="middle" font-size="11">{{ loop.index0 }}시</text>{% endif %}</g>{% endfor %}
-    </svg></section>
+  <section class="board-panel">
+    <div class="section-title"><h3>{{ staff_icon('chart') }}시간대별 접수</h3><small>오늘 {{ arrivals }}건</small></div>
+    <div class="chart-keys"><small>단위 · 건</small><span class="bar-key"><span>통화</span><span>채팅</span></span></div>
+    <svg class="hour-chart" viewBox="0 0 550 145" role="img" aria-label="오늘 시간대별 통화와 채팅 접수, 총 {{ arrivals }}건">
+      <title>시간대별 통화·채팅 접수</title>
+      {% for n in ([0, peak//2, peak] if peak>1 else [0,peak]) %}{% set y=115-n*88/peak %}
+      <line x1="26" x2="546" y1="{{ y }}" y2="{{ y }}" stroke="#d5e0e7"/><text x="22" y="{{ y+4 }}" text-anchor="end">{{ n }}</text>
+      {% endfor %}
+      {% for s in slots %}{% set x=loop.index0*21.5+27 %}{% set hour=loop.index0 %}
+      <g><title>{{ hour }}시 · 통화 {{ s.phone }}건, 채팅 {{ s.web }}건</title>
+        {% for v,color in [(s.phone,'#5189ae'),(s.web,'#54b4bc')] %}{% if v %}{% set h=v*88/peak %}<rect x="{{ x+loop.index0*8 }}" y="{{ 115-h }}" width="7" height="{{ h }}" fill="{{ color }}"/>{% endif %}{% endfor %}
+        {% if hour%3==0 %}<text x="{{ x+7 }}" y="134" text-anchor="middle">{{ '%02d'|format(hour) }}시</text>{% endif %}
+      </g>{% endfor %}
+    </svg>
+  </section>
+  <section class="board-panel"><div class="section-title"><h3>{{ staff_icon('pie') }}문의 유형 분포</h3><nav class="switches" aria-label="문의 유형 집계 단위">
+    {% for key,label in [('day','일별'),('month','월별')] %}<a href="{{ url_for('management.index',unit=key,day=day,month=month,status=status_filter,channel=selected or '') }}" {% if unit==key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav></div>
+    <form class="report-filter pie-filter" method="get"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="status" value="{{ status_filter }}"><input type="hidden" name="channel" value="{{ selected or '' }}">
+      <input aria-label="문의 유형 조회 기간" type="{{ 'month' if unit=='month' else 'date' }}" name="{{ unit }}" value="{{ month if unit=='month' else day }}" max="{{ today.isoformat()[:7] if unit=='month' else today }}" required><button class="admin-btn">조회</button></form>
+    {{ pie(topics) }}
+  </section>
 </div>

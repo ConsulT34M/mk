@@ -203,7 +203,7 @@ def index():
         if tab != "history":
             kind = request.args.get("channel")
             if tab == "overview":
-                data.update(dashboard_charts())
+                data.update(dashboard_charts(kind))
                 data["team"] = quota_rows()
                 data["in_progress"] = Counter(i["current_agent_id"] for i in items if i["status"] == "IN_PROGRESS")
             else:
@@ -211,6 +211,10 @@ def index():
                 data["metrics"] = channel_metrics(kind)
             scoped = [i for i in items if kind not in ("WEB", "PHONE") or i["channel"] == kind]
             counts = Counter(i["status"] for i in scoped)
+            if tab == "overview":
+                breakdown = Counter((i["status"], i["channel"]) for i in scoped)
+                breakdown.update(("ALL", i["channel"]) for i in scoped)
+                data["breakdown"] = breakdown
             status = request.args.get("status", "ALL")
             if status not in ("QUEUED", "IN_PROGRESS", "CLOSED"):
                 status = "ALL"

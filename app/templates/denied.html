@@ -1,5 +1,7 @@
-{% extends "base.html" %}
+{% extends "staff.html" if user else "base.html" %}
 {% block title %}상담 접근 안내{% endblock %}
+{% block heading %}상담 접근 안내{% endblock %}
+{% block desk_content %}<section class="board-panel"><p class="empty">{{ error }}<a href="{{ home_url }}">업무 화면으로 돌아가기</a></p></section>{% endblock %}
 {% block main %}<div class="entry-layout"><section class="entry-card">
   <h1>상담 접근 안내</h1><p class="sub">{{ error }}</p><a class="row-link" href="/portal">내 상담으로 돌아가기 →</a>
 </section></div>{% endblock %}

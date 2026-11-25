@@ -1,5 +1,4 @@
-{% extends "base.html" %}
-{% set sections = [('상담 운영',[('overview','대시보드','dashboard-icon'),('calls','통화','phone-icon'),('chats','채팅','chat-icon')]),('관리',[('agents','계정 관리','person-icon'),('org','조직','person-icon'),('notices','공지사항','archive-icon'),('ai','AI 설정','quota-icon'),('audit','변경 이력','archive-icon')])] %}
+{% extends "staff.html" %}
 {% set titles = {'overview':'관리자 대시보드','agents':'계정 관리','quotas':'상담 할당량','org':'조직','notices':'공지사항','ai':'AI 설정','calls':'통화','chats':'채팅','history':'상담 기록','voice-recordings':'AI 상담 녹취','audit':'변경 이력'} %}
 {% set states = dict(QUEUED='배정 대기', IN_PROGRESS='진행 중', CLOSED='종결') %}
 {% macro state(value) %}<span class="state-pill {{ value|lower }}">{{ states[value] }}</span>{% endmacro %}
@@ -17,79 +16,59 @@
 </div>
 {% endmacro %}
 {% block title %}{{ titles[tab] }} · 관리자 데스크{% endblock %}
-{% block styles %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='prototype/desk.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='agent.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='desk-operations.css') }}">
+{% block heading %}{{ ('웹채팅 기록' if detail.channel == 'WEB' else '전화 상담 기록') if detail else '운영 대시보드' if tab=='overview' else titles[tab] }}{% endblock %}
+{% block heading_actions %}
+  {% if tab=='overview' %}<span id="admin-sync-status" class="sync-status" role="status"></span>
+  {% elif tab=='agents' %}<a class="admin-primary" href="{{ url_for('management.index', tab=tab, edit='new') }}">상담원 추가</a>
+  {% elif detail %}{{ state(detail.status) }}<a class="admin-btn" href="{{ url_for('management.index',tab='history',channel=request.args.get('channel',detail.channel),_anchor='case-history') }}">기록 목록</a>
+  {% elif tab=='history' and note_editor is none %}<a class="admin-primary" href="{{ url_for('management.index',tab=tab,channel=selected,note='new') }}">기록 추가</a>{% endif %}
 {% endblock %}
-{% block layout %}
-<div class="desk admin-desk">
-  <aside class="rail" aria-label="관리자 메뉴">
-    <img class="rail-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" width="2172" height="724" alt="말결 TM">
-    <nav aria-label="관리자 메뉴">
-      {% for group, links in sections %}<p class="rail-group">{{ group }}</p>{% for key,label,icon in links %}
-      <a class="nav-item" href="{{ url_for('management.index',tab=key) }}" {% if tab == key or (tab == 'quotas' and key == 'agents') %}aria-current="page"{% endif %} title="{{ label }}"><i class="icon {{ icon }}" aria-hidden="true"></i><span>{{ label }}</span></a>{% endfor %}{% endfor %}
-    </nav>
-    <div class="profile"><span class="agent-avatar">{{ user.login_id[:2]|upper }}</span><div><strong>{{ user.login_id }}</strong><small>관리자</small></div></div>
-  </aside>
-  <header class="topbar"><h1><img class="compact-logo" src="{{ url_for('static', filename='malgyeol-tm.png') }}" alt="말결 TM" width="2172" height="724">관리자 데스크</h1><button class="logout" type="button" data-logout>로그아웃</button></header>
-  <main class="dashboard">
-    <div class="board-inner admin-inner">
-      {% if detail %}<a class="back-link" href="{{ url_for('management.index', tab='history', channel=request.args.get('channel', detail.channel), _anchor='case-history') }}">← 상담 기록 목록</a>{% endif %}
-      <div class="board-title admin-title">
-        <h2>{{ ('웹채팅 기록' if detail.channel == 'WEB' else '전화 상담 기록') if detail else titles[tab] }}</h2>
-        {% if tab == 'overview' %}<span id="admin-sync-status" role="status"></span>
-        {% elif tab == 'agents' %}<a class="admin-primary" href="{{ url_for('management.index', tab=tab, edit='new') }}">+ 상담원 추가</a>
-        {% elif tab == 'history' and not detail and note_editor is none %}<a class="admin-primary" href="{{ url_for('management.index', tab='history', channel=selected, note='new') }}">+ 기록 추가</a>
-        {% elif detail %}{{ state(detail.status) }}{% endif %}
-      </div>
-      {% if detail %}
-        {% include "_admin_history.html" %}
-      {% elif tab == 'overview' %}
-        <div id="admin-dashboard">{% include "queue.html" %}</div>
-      {% elif tab in ('history','calls','chats') %}
-        {% if metrics %}<div class="channel-kpis">{% for title,value in [('오늘 처리 완료',metrics.completed|string ~ '건'),('현재 대기',metrics.waiting|string ~ '건'),('최장 대기 시간',metrics.longest),('평균 응답 시간',metrics.asa)] %}
-        <div class="board-panel"><small>{{ title }}</small><strong>{{ value }}</strong></div>{% endfor %}</div>
-        <div class="channel-links"><a href="{{ url_for('management.index',tab='history',channel=selected) }}">상담 기록 관리</a>{% if tab=='calls' %}<a href="{{ url_for('management.index',tab='voice-recordings') }}">AI 상담 녹취</a>{% endif %}</div>{% endif %}
-        {% if tab=='history' %}{% include "_admin_notes.html" %}{% endif %}
-        {% include "queue.html" %}
-      {% elif tab in ('org','notices','ai') %}
-        {% include "_admin_operations.html" %}
-      {% elif tab == 'voice-recordings' %}
-        <section class="board-panel admin-panel">
-          <div class="table-scroll"><table class="admin-table"><thead><tr><th>저장 일시</th><th>상담 티켓</th><th>녹취 재생</th><th>보관 기한</th><th>관리</th></tr></thead><tbody>
-            {% for r in clips %}<tr>
-              <td>{{ time_at(r.stored_at|utcstamp) }}</td>
-              <td>{% if r.case_id %}<a class="case-ref" href="{{ url_for('management.history', case_id=r.case_id, _anchor='recordings') }}">#{{ r.case_id[:8]|upper }}</a>{% else %}AI 상담으로 종료{% endif %}</td>
-              <td>{% if r.label %}<div>{{ r.label }}</div>{% endif %}<audio controls preload="none" aria-label="AI 상담 녹취 {{ r.recording_id[:8] }}" src="{{ url_for('management.play_voice', recording_id=r.recording_id) }}"></audio></td>
-              <td>{{ time_at(r.expires_at|utcstamp) }}</td>
-              <td>{{ recording_actions(r, url_for('management.edit_recording', recording_id=r.recording_id), compact=true) }}</td>
-            </tr>{% else %}<tr><td class="admin-empty" colspan="5">재생할 AI 상담 녹취가 없습니다.</td></tr>{% endfor %}
-          </tbody></table></div>
-        </section>
-      {% elif tab == 'agents' %}
-        {% include "_admin_accounts.html" %}
-      {% elif tab == 'quotas' %}
-        <section class="board-panel admin-panel">
-          <div class="section-title"><h3>상담원별 처리 현황</h3>
-            <nav class="switches" aria-label="집계 기간">{% for key, label in periods %}<a {% if key == period %}aria-current="page"{% endif %} href="{{ url_for('management.index', tab=tab, period=key) }}">{{ label }}</a>{% endfor %}</nav>
-          </div>
-          <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담원</th><th>목표</th><th>배정</th><th>처리</th><th>잔여</th><th>관리</th></tr></thead><tbody>
-            {% for p in people %}{% set goal=p[period] %}{% set done=p.completed[period] %}
-            <tr><td class="identity-cell">{{ p.login_id }}{% if not p.is_active %} <small>비활성</small>{% endif %}</td><td>{{ '미설정' if goal is none else goal ~ '건' }}</td><td>{{ p.assigned[period] }}건</td><td>{{ done }}건</td><td>{{ '—' if goal is none else ([goal - done, 0]|max) ~ '건' }}</td><td><a class="admin-btn" href="{{ url_for('management.index', tab='agents', filter='all', edit=p.staff_id) }}">수정</a></td></tr>
-            {% else %}<tr><td colspan="6" class="admin-empty">등록된 상담원이 없습니다.</td></tr>{% endfor %}
-          </tbody></table></div><p class="table-note">한국 시간 기준 · 주간은 월요일부터 집계합니다.</p>
-        </section>
-      {% elif tab == 'audit' %}
-        <section class="board-panel admin-panel"><h3>관리자 작업 내역</h3>
-          <div class="table-scroll"><table class="admin-table"><thead><tr><th>변경 일시</th><th>관리자</th><th>작업</th><th>대상</th><th>상담 번호</th></tr></thead><tbody>
-            {% for h in changes %}<tr><td>{{ time_at(h.created_at|utcstamp) }}</td><td>{{ h.login_id }}</td><td>{{ h.action }}</td><td class="wrap-cell">{{ h.target }}</td><td>{% if h.deleted_at %}#{{ h.case_id[:8]|upper }} · 삭제됨{% elif h.case_id %}<a class="case-ref" href="{{ url_for('management.history', case_id=h.case_id) }}">#{{ h.case_id[:8]|upper }}</a>{% else %}—{% endif %}</td></tr>
-            {% else %}<tr><td colspan="5" class="admin-empty">기록된 관리자 작업이 없습니다.</td></tr>{% endfor %}
-          </tbody></table></div>
-          {% if page > 1 or more %}<nav class="admin-actions pager" aria-label="이력 페이지">{% if page > 1 %}<a class="admin-btn" href="{{ url_for('management.index', tab=tab, page=page-1) }}">이전</a>{% endif %}<span>{{ page }}페이지</span>{% if more %}<a class="admin-btn" href="{{ url_for('management.index', tab=tab, page=page+1) }}">다음</a>{% endif %}</nav>{% endif %}
-        </section>
-      {% endif %}
+{% block desk_content %}
+{% if detail %}
+  {% include "_admin_history.html" %}
+{% elif tab == 'overview' %}
+  <div id="admin-dashboard">{% include "queue.html" %}</div>
+{% elif tab in ('history','calls','chats') %}
+  {% if metrics %}<div class="channel-kpis">{% for title,value in [('오늘 처리 완료',metrics.completed|string ~ '건'),('현재 대기',metrics.waiting|string ~ '건'),('최장 대기 시간',metrics.longest),('평균 응답 시간',metrics.asa)] %}
+  <div class="board-panel"><small>{{ title }}</small><strong>{{ value }}</strong></div>{% endfor %}</div>
+  <div class="channel-links"><a href="{{ url_for('management.index',tab='history',channel=selected) }}">상담 기록 관리</a>{% if tab=='calls' %}<a href="{{ url_for('management.index',tab='voice-recordings') }}">AI 상담 녹취</a>{% endif %}</div>{% endif %}
+  {% if tab=='history' %}{% include "_admin_notes.html" %}{% endif %}
+  {% include "queue.html" %}
+{% elif tab in ('org','notices','ai') %}
+  {% include "_admin_operations.html" %}
+{% elif tab == 'voice-recordings' %}
+  <section class="board-panel admin-panel">
+    <div class="table-scroll"><table class="admin-table"><thead><tr><th>저장 일시</th><th>상담 티켓</th><th>녹취 재생</th><th>보관 기한</th><th>관리</th></tr></thead><tbody>
+      {% for r in clips %}<tr>
+        <td>{{ time_at(r.stored_at|utcstamp) }}</td>
+        <td>{% if r.case_id %}<a class="case-ref" href="{{ url_for('management.history', case_id=r.case_id, _anchor='recordings') }}">#{{ r.case_id[:8]|upper }}</a>{% else %}AI 상담으로 종료{% endif %}</td>
+        <td>{% if r.label %}<div>{{ r.label }}</div>{% endif %}<audio controls preload="none" aria-label="AI 상담 녹취 {{ r.recording_id[:8] }}" src="{{ url_for('management.play_voice', recording_id=r.recording_id) }}"></audio></td>
+        <td>{{ time_at(r.expires_at|utcstamp) }}</td>
+        <td>{{ recording_actions(r, url_for('management.edit_recording', recording_id=r.recording_id), compact=true) }}</td>
+      </tr>{% else %}<tr><td class="admin-empty" colspan="5">재생할 AI 상담 녹취가 없습니다.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+{% elif tab == 'agents' %}
+  {% include "_admin_accounts.html" %}
+{% elif tab == 'quotas' %}
+  <section class="board-panel admin-panel">
+    <div class="section-title"><h3>상담원별 처리 현황</h3>
+      <nav class="switches" aria-label="집계 기간">{% for key, label in periods %}<a {% if key == period %}aria-current="page"{% endif %} href="{{ url_for('management.index', tab=tab, period=key) }}">{{ label }}</a>{% endfor %}</nav>
     </div>
-  </main>
-</div>
+    <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담원</th><th>목표</th><th>배정</th><th>처리</th><th>잔여</th><th>관리</th></tr></thead><tbody>
+      {% for p in people %}{% set goal=p[period] %}{% set done=p.completed[period] %}
+      <tr><td class="identity-cell">{{ p.login_id }}{% if not p.is_active %} <small>비활성</small>{% endif %}</td><td>{{ '미설정' if goal is none else goal ~ '건' }}</td><td>{{ p.assigned[period] }}건</td><td>{{ done }}건</td><td>{{ '—' if goal is none else ([goal - done, 0]|max) ~ '건' }}</td><td><a class="admin-btn" href="{{ url_for('management.index', tab='agents', filter='all', edit=p.staff_id) }}">수정</a></td></tr>
+      {% else %}<tr><td colspan="6" class="admin-empty">등록된 상담원이 없습니다.</td></tr>{% endfor %}
+    </tbody></table></div><p class="table-note">한국 시간 기준 · 주간은 월요일부터 집계합니다.</p>
+  </section>
+{% elif tab == 'audit' %}
+  <section class="board-panel admin-panel"><h3>관리자 작업 내역</h3>
+    <div class="table-scroll"><table class="admin-table"><thead><tr><th>변경 일시</th><th>관리자</th><th>작업</th><th>대상</th><th>상담 번호</th></tr></thead><tbody>
+      {% for h in changes %}<tr><td>{{ time_at(h.created_at|utcstamp) }}</td><td>{{ h.login_id }}</td><td>{{ h.action }}</td><td class="wrap-cell">{{ h.target }}</td><td>{% if h.deleted_at %}#{{ h.case_id[:8]|upper }} · 삭제됨{% elif h.case_id %}<a class="case-ref" href="{{ url_for('management.history', case_id=h.case_id) }}">#{{ h.case_id[:8]|upper }}</a>{% else %}—{% endif %}</td></tr>
+      {% else %}<tr><td colspan="5" class="admin-empty">기록된 관리자 작업이 없습니다.</td></tr>{% endfor %}
+    </tbody></table></div>
+    {% if page > 1 or more %}<nav class="admin-actions pager" aria-label="이력 페이지">{% if page > 1 %}<a class="admin-btn" href="{{ url_for('management.index', tab=tab, page=page-1) }}">이전</a>{% endif %}<span>{{ page }}페이지</span>{% if more %}<a class="admin-btn" href="{{ url_for('management.index', tab=tab, page=page+1) }}">다음</a>{% endif %}</nav>{% endif %}
+  </section>
+{% endif %}
+
 {% endblock %}

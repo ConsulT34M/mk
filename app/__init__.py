@@ -10,13 +10,13 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .admin import PERIODS, init_admin, management, migrate_desk, quota_rows
-from .cases import agent_inbox, case_detail, cases as cases_blueprint, intake_case, staff_notes, waiting_tickets
+from .cases import agent_inbox, case_detail, cases as cases_blueprint, intake_case, recent_closed_cases, staff_notes, waiting_tickets
 from .common import (
     CHAT_COOKIE, INQUIRY_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
     payload, staff_user, text_field,
 )
 from .db import audit, close_db, db as get_db, new_id, one, run, stamp, utcnow
-from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, chat_breakdown, duration, notices, report_range, statistics
+from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, case_status_breakdown, duration, notices, report_range, statistics
 from .recordings import purge, recordings as recordings_blueprint
 from .voice import voice
 
@@ -221,13 +221,24 @@ def desk_lists(user, tab):
     owned = agent_inbox(user["staff_id"])
     active = [item for item in owned if item["status"] == "IN_PROGRESS"]
     closed = [item for item in owned if item["status"] == "CLOSED"]
+    list_status = request.args.get("status", "active")
+    if list_status not in ("active", "closed", "all"):
+        list_status = "active"
+    items = closed if tab == "closed" else active
+    channel_closed = len(closed)
     if tab not in {"dashboard", "desk", "calls", "chats", "closed"}:
         tab = "dashboard"
     if tab in ("calls","chats"):
-        active = [item for item in active if item["channel"] == ("PHONE" if tab == "calls" else "WEB")]
+        channel = "PHONE" if tab == "calls" else "WEB"
+        channel_closed = sum(item["channel"] == channel for item in closed)
+        active = [item for item in active if item["channel"] == channel]
+        items = active if list_status == "active" else [
+            item for item in (closed if list_status == "closed" else owned) if item["channel"] == channel
+        ]
     return {
-        "tab": tab, "items": closed if tab == "closed" else active, "tickets": waiting_tickets(),
-        "active_count": len(active), "closed_count": len(closed),
+        "tab": tab, "items": items, "list_status": list_status, "tickets": waiting_tickets(),
+        "recent_cases": recent_closed_cases(user["staff_id"]) if tab in ("desk", "calls", "chats") else [],
+        "active_count": len(active), "closed_count": len(closed), "channel_closed_count": channel_closed,
     }
 
 
@@ -236,7 +247,11 @@ def agent_desk(user, detail=None):
     tab = request.args.get("tab")
     if detail:
         case = detail["case"]
-        tab = "closed" if case["status"] == "CLOSED" else "calls" if case["channel"] == "PHONE" else "chats"
+        channel_tab = "calls" if case["channel"] == "PHONE" else "chats"
+        if case["status"] == "CLOSED" and not (tab == channel_tab and request.args.get("status") in ("all", "closed")):
+            tab = "closed"
+        else:
+            tab = channel_tab
     if tab in ("notices", "stats", "recordings"):
         data = {}
         if tab == "notices":
@@ -263,8 +278,9 @@ def agent_desk(user, detail=None):
     if not detail:
         g.audit_target = ("CASE_LIST", None, None)
     case = detail["case"] if detail else None
+    data["notices"] = notices(latest=True)
     if data["tab"] == "dashboard":
-        data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS, chats=chat_breakdown(user["staff_id"]), notices=notices(latest=True))
+        data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS, case_summary=case_status_breakdown())
     return render_template(
         "agent.html", user=user, detail=detail, case=case, selected_id=case["case_id"] if case else None,
         explicit_case=explicit_case, recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5)), **data,
@@ -280,13 +296,16 @@ def desk_updates():
     selected_id = request.args.get("case_id")
     result = {
         "waiting": len(data["tickets"]), "active": data["active_count"], "closed": data["closed_count"],
+        "listed": len(data["items"]), "channel_closed": data["channel_closed_count"],
+        "notice_html": render_template("_notices.html", notices=notices(latest=True)),
         "html": render_template(template, selected_id=selected_id, **data),
     }
     if data["tab"] == "dashboard":
         result["quota_html"] = render_template("_quota_rows.html", quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
-        result["chart_html"] = render_template("_chat_chart.html", chats=chat_breakdown(user["staff_id"]))
-        result["notice_html"] = render_template("_notices.html", notices=notices(latest=True))
-    elif selected_id:
+        result["chart_html"] = render_template("_case_chart.html", case_summary=case_status_breakdown())
+    elif data["tab"] != "closed":
+        result["history_html"] = render_template("_agent_history.html", recent_cases=data["recent_cases"])
+    if data["tab"] != "dashboard" and selected_id:
         result["notes_html"] = render_template("_agent_notes.html", notes=staff_notes(selected_id, agent_id=user["staff_id"]))
     return result
 

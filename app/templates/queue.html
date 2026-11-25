@@ -1,21 +1,19 @@
 {% if tab == 'overview' %}
 {% include "_admin_charts.html" %}
 {% endif %}
-<section class="board-panel admin-panel"id="{{ 'case-history' if tab == 'history' else 'tickets' }}">
-  <div class="section-title"><h3>{{ '상담 티켓' if tab == 'overview' else '통화 상담 내역' if tab=='calls' else '채팅 상담 내역' if tab=='chats' else '채팅·전화 상담 내역' }}</h3>
+<section class="board-panel admin-panel" id="{{ 'case-history' if tab == 'history' else 'tickets' }}">
+  <div class="section-title"><h3>{{ staff_icon('list') }}{{ '상담 접수 목록' if tab == 'overview' else '통화 상담 내역' if tab=='calls' else '채팅 상담 내역' if tab=='chats' else '채팅·전화 상담 내역' }}</h3>
     {% if tab == 'history' %}<nav class="switches" aria-label="상담 기록 필터">{% for key, label in [('ALL','전체'),('WEB','웹채팅'),('PHONE','전화'),('RECORDINGS','녹취')] %}<a href="{{ url_for('management.index', tab=tab, channel=key) }}" {% if selected == key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav>
     {% else %}<span class="count">{{ ticket_count }}건</span>
-    <form method="get" class="report-filter"><input type="hidden" name="tab" value="{{ tab }}">
-      {% if tab=='overview' %}<input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="{{ unit }}" value="{{ month if unit=='month' else day }}">
-      <select name="channel" aria-label="상담 채널"><option value="">전체 채널</option>{% for key,label in [('PHONE','통화'),('WEB','채팅')] %}<option value="{{ key }}" {% if selected==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endif %}
+    {% if tab!='overview' %}    <form method="get" class="report-filter"><input type="hidden" name="tab" value="{{ tab }}">
       <select name="status" aria-label="상담 상태"><option value="ALL">전체 상태 ({{ channel_count }})</option>{% for key,label in states.items() %}<option value="{{ key }}" {% if status_filter==key %}selected{% endif %}>{{ label }} ({{ counts[key] }})</option>{% endfor %}</select>
-      <button class="admin-btn">조회</button></form><a class="refresh-list" href="{{ request.full_path.rstrip('?') }}">새로고침</a>{% endif %}
+      <button class="admin-btn">조회</button></form>{% endif %}<a class="refresh-list" href="{{ request.full_path.rstrip('?') }}">새로고침</a>{% endif %}
   </div>
-  <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담 번호</th><th>채널</th><th>상태</th><th>접수 일시</th><th>담당 상담원</th>{% if tab == 'history' %}<th>녹취</th><th>관리</th>{% endif %}</tr></thead><tbody>
+  <div class="table-scroll"><table class="admin-table"><thead><tr><th>상담 번호</th><th>채널</th><th>문의 유형</th><th>상태</th><th>접수 일시</th><th>담당 상담원</th>{% if tab == 'history' %}<th>녹취</th><th>관리</th>{% endif %}</tr></thead><tbody>
     {% for item in items %}<tr data-case-id="{{ item.case_id }}">
       <td><a class="case-ref" title="{{ item.case_id }} 상담 기록 열기" aria-label="{{ item.case_id[:8]|upper }} 상담 기록 열기" href="{{ url_for('management.history', case_id=item.case_id) }}">#{{ item.case_id[:8]|upper }}</a></td>
-      <td><span class="channel"><i aria-hidden="true" class="icon {{ 'chat-icon' if item.channel == 'WEB' else 'phone-icon' }}"></i>{{ '웹채팅' if item.channel == 'WEB' else '전화' }}</span></td>
-      <td>{{ state(item.status) }}</td><td>{{ time_at(item.opened_at) }}</td>
+      <td><span class="channel">{{ staff_icon('chat' if item.channel=='WEB' else 'phone') }}{{ '웹채팅' if item.channel == 'WEB' else '전화' }}</span></td>
+      <td>{{ topic_names.get(item.inquiry_type,'미분류') }}</td><td>{{ state(item.status) }}</td><td>{{ time_at(item.opened_at) }}</td>
       <td>{% if tab == 'overview' and item.status == 'IN_PROGRESS' %}
         <form method="post" action="{{ url_for('cases.assign', case_id=item.case_id) }}" class="admin-actions assign-form" data-action="admin" data-done="담당 상담원을 변경했습니다.">
           <input type="hidden" name="previous_agent_id" value="{{ item.current_agent_id }}">
@@ -34,7 +32,7 @@
           <input type="hidden" name="operation" value="delete_ticket"><button type="submit" class="admin-btn danger">삭제</button>
         </form>
       </div></td>{% endif %}
-    </tr>{% else %}<tr><td class="admin-empty" colspan="{{ 7 if tab == 'history' else 5 }}">표시할 상담이 없습니다.</td></tr>{% endfor %}
+    </tr>{% else %}<tr><td class="admin-empty" colspan="{{ 8 if tab == 'history' else 6 }}">표시할 상담이 없습니다.</td></tr>{% endfor %}
   </tbody></table></div>
   {% if tab!='history' and pages > 1 %}<nav class="admin-actions pager" aria-label="상담 티켓 페이지">
     {% if page > 1 %}<a class="admin-btn" href="{{ url_for('management.index',page=page-1,_anchor='tickets',**page_query) }}">이전</a>{% endif %}

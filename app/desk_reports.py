@@ -10,7 +10,7 @@ KST = timedelta(hours=9)
 TOPICS = {"ACCOUNT": "계정·로그인", "FUNDS": "입출금", "TRADE": "거래", "GUIDE": "이용 안내"}
 OUTCOMES = {"RESOLVED": "해결", "FOLLOWUP": "후속 안내"}
 DIRECTIONS = {"INBOUND": "수신", "OUTBOUND": "발신"}
-TOPIC_COLORS = ("#6459b4", "#dbb559", "#9e91d5", "#78a5a0", "#aaa7b6")
+TOPIC_COLORS = ("#5189ae", "#54b4bc", "#e4a355", "#88a379", "#97a4ae")
 
 
 def today():
@@ -67,7 +67,7 @@ def pie(labels, colors, counts):
     return {"total": total, "slices": slices}
 
 
-def dashboard_charts():
+def dashboard_charts(channel=None):
     current = today()
     unit = request.args.get("unit", "day")
     if unit == "month":
@@ -78,16 +78,18 @@ def dashboard_charts():
         end = start + timedelta(days=1)
     else:
         raise ApiError("INVALID_INPUT")
-    counts = rows("SELECT inquiry_type, COUNT(*) AS n FROM visible_case WHERE opened_at>=%s AND opened_at<%s GROUP BY inquiry_type",
-                  (midnight(start), midnight(end)))
+    channel_args = (channel,) if channel in ("WEB", "PHONE") else ()
+    scope = "WHERE opened_at>=%s AND opened_at<%s" + (" AND channel=%s" if channel_args else "")
+    counts = rows("SELECT inquiry_type, COUNT(*) AS n FROM visible_case " + scope + " GROUP BY inquiry_type",
+                  (midnight(start), midnight(end), *channel_args))
     hourly = rows("SELECT HOUR(opened_at + INTERVAL 9 HOUR) AS h, SUM(channel='WEB') AS web, SUM(channel='PHONE') AS phone "
-                  "FROM visible_case WHERE opened_at>=%s AND opened_at<%s GROUP BY h", (midnight(current), midnight(current + timedelta(days=1))))
+                  "FROM visible_case " + scope + " GROUP BY h", (midnight(current), midnight(current + timedelta(days=1)), *channel_args))
     slots = [{"web": 0, "phone": 0} for _ in range(24)]
     for row in hourly:
         slots[row["h"]] = {"web": int(row["web"]), "phone": int(row["phone"])}
     return dict(unit=unit, day=start, month=start.isoformat()[:7], today=current,
                 topics=pie({**TOPICS, None: "미분류"}, TOPIC_COLORS, {r["inquiry_type"]: r["n"] for r in counts}),
-                slots=slots, peak=max(1, *(r["web"] + r["phone"] for r in slots)), arrivals=sum(r["web"] + r["phone"] for r in slots))
+                slots=slots, peak=max(1, *(max(row.values()) for row in slots)), arrivals=sum(r["web"] + r["phone"] for r in slots))
 
 
 def channel_metrics(kind):
@@ -105,12 +107,13 @@ def channel_metrics(kind):
                 asa=duration(result["asa"]) if result["asa"] is not None else "—")
 
 
-def chat_breakdown(staff_id):
-    data = rows("SELECT CASE WHEN c.closed_at IS NOT NULL THEN 'closed' WHEN c.current_agent_id IS NULL THEN 'queued' "
-                "ELSE 'active' END AS state,COUNT(*) AS n FROM visible_case c LEFT JOIN staff_account a ON a.staff_id=c.current_agent_id "
-                "WHERE c.channel='WEB' AND (c.current_agent_id IS NULL OR c.current_agent_id=%s OR "
-                "a.team_id=(SELECT team_id FROM staff_account WHERE staff_id=%s)) GROUP BY state", (staff_id, staff_id))
-    return pie({"queued": "대기", "active": "진행", "closed": "종결"}, ("#dbb559", "#9e91d5", "#6459b4"), {r["state"]: r["n"] for r in data})
+def case_status_breakdown():
+    counts = rows(
+        "SELECT CASE WHEN closed_at IS NOT NULL THEN 'closed' WHEN current_agent_id IS NULL THEN 'queued' "
+        "ELSE 'active' END AS state, COUNT(*) AS n FROM visible_case GROUP BY state"
+    )
+    return pie({"queued": "대기", "active": "진행 중", "closed": "종결"},
+               ("#d29a48", "#50a9b5", "#68869a"), {row["state"]: row["n"] for row in counts})
 
 
 def notices(latest=False):

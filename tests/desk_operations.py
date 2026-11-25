@@ -6,7 +6,7 @@ from uuid import uuid4
 from app import app
 from app.admin import migrate_desk
 from app.db import db, one, run
-from app.desk_reports import dashboard_charts, midnight, today
+from app.desk_reports import case_status_breakdown, dashboard_charts, midnight, today
 
 
 def uid():
@@ -28,6 +28,11 @@ def page(client, path):
     return response.get_data(as_text=True)
 
 
+def dashboard_counts():
+    with app.app_context():
+        return {part["label"]: part["count"] for part in case_status_breakdown()["slices"]}
+
+
 post(admin, "/staff/sessions", {"login_id":"admin","password":os.environ["DEMO_ADMIN_PASSWORD"]})
 staff = []
 for client in (worker, peer, outside):
@@ -47,20 +52,38 @@ assert title not in page(guest, "/inquiry")
 previous = dict.fromkeys(staff)
 team = post(admin, "/admin/teams", dict(name="검증 "+uid(), members=staff[:2], previous=previous), 201)["team_id"]
 assert "현재 소속 기준" in page(admin, "/admin?tab=org&team="+team)
+counts = dashboard_counts()
 for client, channel in [(worker,"WEB"),(peer,"PHONE"),(outside,"WEB")]:
     ticket = admin.post("/cases", json=dict(support_subject_ref=uid(),intake_request_id=uid(),channel=channel,inquiry_type="TRADE"),
                         headers={"Authorization":"Bearer "+os.environ["PARTNER_TOKEN"]})
     assert ticket.status_code == 201
+    assert dashboard_counts() == counts | {"대기": counts["대기"] + 1}
     case_id = ticket.json["case_id"]
     path = "/staff/cases/"+case_id
     post(client, path+"/claim", {})
+    assert dashboard_counts() == counts | {"진행 중": counts["진행 중"] + 1}
     post(client, path+"/category", {"inquiry_type":"FUNDS"})
+    channel_tab = "calls" if channel == "PHONE" else "chats"
+    list_path = "/portal/updates?tab=" + channel_tab
+    assert case_id in client.get(list_path + "&status=active").json["html"]
+    assert case_id not in client.get(list_path + "&status=closed").json["html"]
     if channel=="PHONE":
         post(client, path+"/phone-response", dict(call_at=datetime.now(timezone.utc).isoformat(),inquiry="검증",guidance="안내",
              followup_required=False,consent_state="REFUSED",talk_seconds=75,call_direction="OUTBOUND"))
     post(client, path+"/close", dict(result_note="종결",outcome="RESOLVED"))
+    counts["종결"] += 1
+    assert dashboard_counts() == counts
+    recent = client.get(list_path + "&status=all").json
+    assert case_id in recent["html"] and case_id in recent["history_html"]
+    assert case_id not in client.get(list_path + "&status=active").json["html"]
+    assert f'data-tab="{channel_tab}"' in page(client, "/portal/" + case_id + "?tab=" + channel_tab + "&status=closed")
     if channel=="PHONE":
         phone_id=case_id
+chart_url = "/portal/updates?tab=dashboard"
+chart_html = worker.get(chart_url).json["chart_html"].strip()
+assert chart_html == outside.get(chart_url).json["chart_html"].strip()
+assert chart_html in page(worker, "/portal?tab=dashboard")
+assert f">{sum(counts.values())}건</text>" in chart_html
 local_day=today().isoformat()
 q="&start="+local_day+"&end="+local_day
 assert "기간 내 종결 상담 1건" in page(worker,"/portal?tab=stats"+q)
@@ -75,6 +98,7 @@ with app.app_context():
     db().commit()
 assert phone_id in page(peer,"/portal?tab=recordings"+q)
 assert phone_id not in page(worker,"/portal?tab=recordings"+q)
+assert phone_id not in worker.get("/portal/updates?tab=calls&status=all").json["history_html"]
 with app.app_context():
     name=one("SELECT name FROM staff_team WHERE team_id=%s",(team,))["name"]
 post(admin, "/admin/teams/"+team, dict(name=name,previous_name=name,previous=previous,members=[]),409)
@@ -101,6 +125,10 @@ with app.app_context():
         run("INSERT INTO support_case(case_id,channel,opened_at,inquiry_type) VALUES (%s,'WEB',%s,'GUIDE')", (uid(), instant))
     db().commit()
 assert [daily_guide(day) for day in (prior_day, current_day)] == [count + 1 for count in before]
+with app.test_request_context("/admin?unit=day&day=" + local_day):
+    all_channels, phone, web = (dashboard_charts(kind) for kind in (None, "PHONE", "WEB"))
+    assert all_channels["topics"]["total"] == phone["topics"]["total"] + web["topics"]["total"]
+    assert all(slot["web"] == 0 for slot in phone["slots"]) and all(slot["phone"] == 0 for slot in web["slots"])
 assert "시간대별 접수" in page(admin,"/admin?unit=day&day="+local_day)
 assert local_day[:7] in page(admin,"/admin?unit=month&month="+local_day[:7])
 policy=dict(enabled=False,instructions="운영 테스트",offer_handoff=False)

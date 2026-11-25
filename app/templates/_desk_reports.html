@@ -1,13 +1,16 @@
 {% macro pie(chart, ring=false) %}
-{% if chart.total %}<div class="distribution">
+<div class="distribution">
   <svg class="distribution-plot" viewBox="0 0 100 100" aria-hidden="true">
+    {% if not chart.total %}<circle cx="50" cy="50" r="49" fill="#e2e8ec"/>{% endif %}
     {% for part in chart.slices if part.count %}
-      {% if part.sector %}<path d="{{ part.sector }}" fill="{{ part.color }}"/>{% else %}<circle cx="50" cy="50" r="50" fill="{{ part.color }}"/>{% endif %}
+      {% if part.sector %}<path d="{{ part.sector }}" fill="{{ part.color }}" stroke="white" stroke-width=".5"/>{% else %}<circle cx="50" cy="50" r="50" fill="{{ part.color }}"/>{% endif %}
     {% endfor %}
-    {% if ring %}<circle cx="50" cy="50" r="34" fill="white"/><text x="50" y="55" text-anchor="middle" font-size="17" font-weight="700">{{ chart.total }}건</text>{% endif %}
-  </svg><ul class="distribution-key">{% for part in chart.slices %}
-    <li><span><svg width="9" height="9" aria-hidden="true"><circle cx="4.5" cy="4.5" r="4" fill="{{ part.color }}"/></svg> {{ part.label }}</span><b>{{ part.count }}건</b><small>{{ '%g'|format(part.percent|round(1)) }}%</small></li>
-  {% endfor %}</ul></div>{% else %}<p class="admin-empty">집계할 상담이 없습니다.</p>{% endif %}
+    {% if ring or not chart.total %}{% if ring %}<circle cx="50" cy="50" r="34" fill="white"/>{% endif %}<text x="50" y="55" text-anchor="middle">{{ chart.total }}건</text>{% endif %}
+  </svg>
+  <table class="distribution-key"><thead><tr><th>{{ '상담 상태' if ring else '문의 유형' }}</th><th>건수</th><th>비율</th></tr></thead><tbody>
+    {% for part in chart.slices %}<tr><th scope="row"><svg class="legend-swatch" width="8" height="8" aria-hidden="true"><rect width="8" height="8" fill="{{ part.color }}"/></svg>{{ part.label }}</th><td>{{ part.count }}</td><td>{{ '%g'|format(part.percent|round(1)) }}%</td></tr>{% endfor %}
+    </tbody><tfoot><tr><th scope="row">합계</th><td>{{ chart.total }}</td><td>{{ '100%' if chart.total else '—' }}</td></tr></tfoot></table>
+</div>
 {% endmacro %}
 
 {% macro range_fields(dates) %}

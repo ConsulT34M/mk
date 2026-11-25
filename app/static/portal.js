@@ -289,7 +289,12 @@ if (adminDashboard) {
       // Keep an administrator's pending choice intact when another ticket changes.
       const choosing = [...adminDashboard.querySelectorAll(".assign-form")].some(form =>
         form.elements.new_agent_id.value !== form.elements.previous_agent_id.value);
-      if (choosing || adminDashboard.contains(document.activeElement) || adminDashboard.querySelector("[data-busy]")) return;
+      const filterChanged = [...adminDashboard.querySelectorAll(".report-filter select, .report-filter input:not([type=hidden])")].some(field => {
+        if (field.tagName !== "SELECT") return field.value !== field.defaultValue;
+        const initial = [...field.options].find(option => option.defaultSelected) || field.options[0];
+        return field.value !== initial.value;
+      });
+      if (choosing || filterChanged || adminDashboard.contains(document.activeElement) || adminDashboard.querySelector("[data-busy]")) return;
       formatTimes(next);
       if (!adminDashboard.isEqualNode(next)) adminDashboard.replaceChildren(...next.childNodes);
     } catch {

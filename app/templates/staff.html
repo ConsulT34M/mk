@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% set is_admin = user.role == 'ADMIN' %}
+{% set role_name = '관리자' if is_admin else '상담원' %}
+{% set home_url = url_for('management.index') if is_admin else url_for('queue_page', tab='dashboard') %}
+{% set endpoint = 'management.index' if is_admin else 'queue_page' %}
+{% set active_menu = tab %}
+{% if is_admin %}
+  {% set menu = [
+    ('상담 운영', [('overview','대시보드','chart'),('calls','통화','phone'),('chats','채팅','chat')]),
+    ('관리', [('agents','계정 관리','person'),('org','조직','team'),('notices','공지사항','notice'),('ai','AI 설정','settings'),('audit','변경 이력','history')])
+  ] %}
+  {% if tab=='quotas' %}{% set active_menu='agents' %}
+  {% elif tab=='voice-recordings' %}{% set active_menu='calls' %}
+  {% elif tab=='history' %}{% set active_menu='chats' if (detail and detail.channel=='WEB') or (not detail and selected=='WEB') else 'calls' %}{% endif %}
+{% else %}
+  {% set menu = [
+    ('상담 업무', [('dashboard','대시보드','home'),('calls','내 상담','chat'),('closed','종결 상담','archive')]),
+    ('조회', [('recordings','통화 내역·녹취','phone'),('stats','통계','chart'),('notices','공지사항','notice')])
+  ] %}
+  {% if tab in ('desk','chats') %}{% set active_menu='calls' %}{% endif %}
+{% endif %}
+
+{% macro staff_icon(name) %}<svg class="icon" aria-hidden="true" width="16" height="16"><use href="{{ url_for('static', filename='staff-icons.svg') }}#{{ name }}"></use></svg>{% endmacro %}
+
+{% macro navigation() %}
+<nav aria-label="{{ role_name }} 업무 메뉴">
+  {% for group, links in menu %}
+  <p class="rail-group">{{ group }}</p>
+  {% for key,label,icon in links %}
+  <a class="nav-item" href="{{ url_for(endpoint,tab=key,status='all') if not is_admin and key=='calls' else url_for(endpoint,tab=key) }}" {% if key==active_menu %}aria-current="page"{% endif %}>
+    {{ staff_icon(icon) }}<span>{{ label }}</span>
+  </a>
+  {% endfor %}
+  {% endfor %}
+</nav>
+{% endmacro %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='desk-operations.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='admin.css' if is_admin else 'agent.css') }}">
+{% endblock %}
+{% block layout %}
+<div id="desk" class="desk {{ 'admin-desk' if is_admin else 'agent-desk' }}" data-tab="{{ tab }}"
+     data-pane="{{ 'chat' if explicit_case else 'list' }}" data-selected="{{ selected_id or '' }}"
+     {% if detail and detail.content_expired %}data-content-expired{% endif %}>
+  <header class="topbar">
+    <a class="brand" href="{{ home_url }}" aria-label="말결 TM · {{ role_name }} 대시보드">말결 <span>TM</span></a>
+    <div class="topbar-inner">
+      <details class="mobile-menu"><summary aria-label="업무 메뉴">{{ staff_icon('menu') }} 메뉴</summary>{{ navigation() }}</details>
+      <span class="product">{{ staff_icon('screen') }}{{ role_name }} 프로그램</span>
+      <div class="identity"><span class="online">접속 중</span><span class="profile-name">{{ staff_icon('person') }}{{ user.display_name or user.login_id }}</span><button type="button" data-logout>로그아웃</button></div>
+    </div>
+  </header>
+  <aside class="rail"><div class="rail-heading">업무 메뉴 {{ staff_icon('menu') }}</div>{{ navigation() }}</aside>
+  <main class="dashboard">
+    <header class="board-title">
+      <h1>{% block heading %}{% endblock %}</h1>
+      {% block heading_actions %}{% endblock %}
+      <div class="crumb">{{ staff_icon('home') }}{% for group,links in menu if active_menu in links|map(attribute=0)|list %}<span>›</span>{{ group }}{% endfor %}<span>›</span>{{ self.heading() }}</div>
+    </header>
+    <div class="board-inner">{% block desk_content %}{% endblock %}</div>
+  </main>
+  <footer class="desk-footer"><span>말결 TM · {{ role_name }} 데스크</span><span>통계 기준　한국 시간 (KST)</span></footer>
+</div>
+{% endblock %}

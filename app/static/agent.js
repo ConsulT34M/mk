@@ -6,6 +6,8 @@ const search = document.getElementById("inbox-search");
 const syncStatus = document.getElementById("sync-status");
 const listURL = new URL("/portal/updates", location.origin);
 listURL.searchParams.set("tab", desk.dataset.tab);
+const listStatus = new URL(location.href).searchParams.get("status");
+if (listStatus) listURL.searchParams.set("status", listStatus);
 if (desk.dataset.selected) listURL.searchParams.set("case_id", desk.dataset.selected);
 let previousHTML;
 let previousQuota;
@@ -40,6 +42,15 @@ async function refreshDesk() {
         lastBoard[key] = data[key];
       }
     }
+    const history = document.getElementById("live-history");
+    if (history && data.history_html !== lastBoard.history) {
+      const openAudio = history.querySelector("details[open] audio");
+      if (!openAudio || !data.history_html.includes(openAudio.getAttribute("src"))) {
+        history.innerHTML = data.history_html;
+        formatTimes(history);
+        lastBoard.history = data.history_html;
+      }
+    }
     document.querySelectorAll("[data-total]").forEach(el => { el.textContent = data[el.dataset.total]; });
     if (data.quota_html && data.quota_html !== previousQuota) {
       document.getElementById("live-quota").innerHTML = data.quota_html;
@@ -62,7 +73,10 @@ async function refreshDesk() {
     filterInbox();
     const selected = liveList.querySelector("[aria-current=page]");
     if (desk.dataset.selected && !selected) {
-      location.replace("/portal?tab=" + desk.dataset.tab);
+      const list = new URL("/portal", location.origin);
+      list.searchParams.set("tab", desk.dataset.tab);
+      if (listStatus) list.searchParams.set("status", listStatus);
+      location.replace(list);
       return;
     }
     if (selected?.hasAttribute("data-content-expired") && !desk.hasAttribute("data-content-expired")) {
@@ -103,26 +117,6 @@ liveList.addEventListener("submit", async event => {
     tell(error.message);
     await refreshDesk();
   }
-});
-
-const showInfo = document.getElementById("show-info");
-const closeInfo = document.getElementById("close-info");
-const shade = document.getElementById("shade");
-function toggleInfo(open) {
-  desk.classList.toggle("info-open", open);
-  showInfo.setAttribute("aria-expanded", String(open));
-  shade.hidden = !open;
-  if (open) closeInfo.focus();
-  else if (showInfo.offsetParent) showInfo.focus();
-}
-showInfo?.addEventListener("click", () => toggleInfo(true));
-closeInfo?.addEventListener("click", () => toggleInfo(false));
-shade?.addEventListener("click", () => toggleInfo(false));
-matchMedia("(max-width: 945px)").addEventListener("change", () => {
-  if (desk.classList.contains("info-open")) toggleInfo(false);
-});
-document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && desk.classList.contains("info-open")) toggleInfo(false);
 });
 
 const answer = document.getElementById("chat-message");

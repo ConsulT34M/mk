@@ -131,6 +131,16 @@ def agent_inbox(staff_id):
     return result
 
 
+def recent_closed_cases(staff_id):
+    items = rows(
+        "SELECT c.*, (SELECT r.recording_id FROM recording r WHERE r.case_id=c.case_id AND r.state='READY' "
+        "AND r.expires_at>UTC_TIMESTAMP(6) ORDER BY r.stored_at DESC,r.recording_id LIMIT 1) AS clip_id "
+        "FROM visible_case c WHERE c.current_agent_id=%s AND c.closed_at IS NOT NULL "
+        "ORDER BY c.closed_at DESC,c.case_id LIMIT 6", (staff_id,),
+    )
+    return [dict(case_info(item), clip_id=item["clip_id"]) for item in items]
+
+
 @cases.post("/staff/cases/<uuid:case_id>/assignee")
 def assign(case_id):
     user = admin()
