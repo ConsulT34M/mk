@@ -7,6 +7,7 @@
   const state = document.getElementById("voice-state");
   const receipt = document.getElementById("voice-ticket");
   const audio = document.getElementById("voice-audio");
+  const ringback = document.getElementById("voice-ringback");
   const consent = document.getElementById("voice-consent");
   const recordingState = document.getElementById("voice-recording-state");
   const sessions = dialog.dataset.sessionUrl;
@@ -18,12 +19,18 @@
     return api(sessions + "/" + id + "/end", {method: "POST", body: {}, keepalive: true});
   }
 
+  function stopWaiting() {
+    ringback.pause();
+    state.classList.remove("connecting");
+  }
+
   async function finish(message) {
     const call = active;
     if (!call) return;
     active = null;
     finishing = true;
     clearTimeout(call.timer);
+    stopWaiting();
     call.controller.abort();
     const drained = call.recorder?.stop();
     call.stream?.getTracks().forEach(track => track.stop());
@@ -38,6 +45,7 @@
     if (wasRecording) recordingState.textContent = "녹취를 저장하고 있어요.";
     try {
       await drained;
+      await call.connected;
       const result = call.id && await releaseSession(call.id);
       if (wasRecording) {
         recordingState.textContent = result?.recorded
@@ -71,7 +79,7 @@
     let output;
     try {
       const ticket = await api(sessions + "/" + call.id + "/handoff", {
-        method: "POST", body: {}, signal: call.controller.signal,
+        method: "POST", body: {call_at: call.startedAt}, signal: call.controller.signal,
       });
       if (active !== call) return;
       const number = ticket.case_id.slice(0, 8).toUpperCase();
@@ -103,15 +111,22 @@
       if (call.recorder?.url) call.recorder.attach(audio.srcObject);
       audio.play().catch(() => { if (active === call) audio.hidden = false; });
     };
-    peer.addTrack(call.stream.getAudioTracks()[0], call.stream);
+    const microphone = call.stream.getAudioTracks()[0];
+    microphone.enabled = false;
+    peer.addTrack(microphone, call.stream);
     const channel = peer.createDataChannel("oai-events");
     call.channel = channel;
     channel.onopen = () => {
       if (active !== call) return;
+      call.startedAt = new Date().toISOString();
+      if (dialog.hasAttribute("data-report-connection")) {
+        call.connected = api(sessions + "/" + call.id + "/connected", {method: "POST", body: {}}).catch(() => {});
+      }
       clearTimeout(call.timer);
+      stopWaiting();
       if (call.recorder) {
         try {
-          call.recorder.start(sessions + "/" + call.id + "/recording", call.stream, audio.srcObject);
+          call.recorder.start(sessions + "/" + call.id + "/recording", call.stream, audio.srcObject, call.startedAt);
           recordingState.hidden = false;
           recordingState.textContent = "녹취 중 · 고객과 AI의 음성을 저장하고 있어요.";
         } catch {
@@ -122,8 +137,9 @@
       state.textContent = "AI와 연결됐어요. 편하게 말씀해 주세요.";
       send(call, {type: "response.create", response: {
         tool_choice: "none",
-        instructions: "한국어로 말결 TM의 AI 상담원이라고 짧게 인사하고 어떤 문의인지 물어보세요.",
+        instructions: "첫 인사는 다음 문구만 적힌 그대로 한 번 말하세요.\n" + JSON.stringify(call.greeting),
       }});
+      microphone.enabled = true;
     };
     channel.onclose = channel.onerror = () => {
       if (active === call) finish("음성 연결이 종료됐어요. 다시 시작할 수 있어요.");
@@ -151,7 +167,11 @@
     start.hidden = true;
     stop.hidden = false;
     stop.focus();
-    state.textContent = "마이크 사용을 허용해 주세요.";
+    state.textContent = "AI 상담원 연결 중… 마이크 사용을 허용해 주세요.";
+    state.classList.add("connecting");
+    call.timer = setTimeout(() => finish("연결 시간이 초과됐어요. 다시 시작해 주세요."), 25000);
+    ringback.load();
+    ringback.play().catch(() => {}); // 대기음이 꺼져 있거나 재생이 차단돼도 통화는 계속한다.
     try {
       if (consent.checked) {
         call.recorder = new VoiceRecording(() => {
@@ -166,8 +186,7 @@
         return;
       }
       call.stream = stream;
-      state.textContent = "AI 음성 상담에 연결하고 있어요.";
-      call.timer = setTimeout(() => finish("연결 시간이 초과됐어요. 다시 시작해 주세요."), 25000);
+      state.textContent = "AI 상담원 연결 중…";
       const peer = connectMedia(call);
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
@@ -176,6 +195,7 @@
       const access = await api(sessions, {method: "POST", body: {recording_consent: record, summary_consent: record}, signal});
       call.id = access.voice_id;
       if (active !== call) { releaseSession(call.id).catch(() => {}); return; }
+      call.greeting = access.greeting;
       const answer = await fetch("https://api.openai.com/v1/realtime/calls", {
         method: "POST", credentials: "omit", signal,
         headers: {"Authorization": "Bearer " + access.client_secret, "Content-Type": "application/sdp"},
@@ -195,7 +215,7 @@
     }
   }
 
-  document.getElementById("voice-open").addEventListener("click", () => dialog.showModal());
+  document.getElementById("voice-open")?.addEventListener("click", () => dialog.showModal());
   start.addEventListener("click", begin);
   stop.addEventListener("click", () => finish("음성 상담이 종료됐어요."));
   dialog.addEventListener("close", () => finish("음성 상담이 종료됐어요."));

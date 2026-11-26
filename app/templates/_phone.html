@@ -24,19 +24,18 @@
         {% if not closed %}<button class="secondary" type="submit">응대 기록 저장</button>{% endif %}
       </form>
     {% endif %}</section>
-    <details class="case-recordings" id="case-recordings"><summary>통화 녹취{% if detail.recordings %} · {{ detail.recordings|length }}건{% endif %}</summary>
+    <details class="case-recordings" id="case-recordings" {% if closed and detail.recordings %}open{% endif %}><summary>통화 녹취{% if detail.recordings %} · {{ detail.recordings|length }}건{% endif %}</summary>
       {% if not closed and phone.consent_state == 'AGREED' %}
       <form method="post" action="/staff/cases/{{ case.case_id }}/recordings" enctype="multipart/form-data" class="stack" data-action="upload" data-id="{{ case.case_id }}">
-        <label>WAV 파일 <span class="muted">최대 {{ config.WAV_LIMIT // 1048576 }} MiB · 저장 후 {{ recording_minutes }}분 보관</span>
+        <label>WAV 파일 <span class="muted">최대 {{ config.WAV_LIMIT // 1048576 }} MiB</span>
           <input name="file" type="file" accept=".wav,audio/wav" required></label>
         <button class="secondary" type="submit">녹취 등록</button>
       </form>
       {% elif not closed %}<p class="muted">녹취 동의를 저장한 뒤 파일을 등록할 수 있습니다.</p>{% endif %}
       {% for rec in detail.recordings %}
       <div class="record">{% if rec.label or rec.ai %}<strong>{{ rec.label or 'AI 상담 녹취' }}</strong>{% endif %}<span>{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[rec.state] }}</span>
-        {% if rec.playable %}<audio controls preload="none" src="/staff/cases/{{ case.case_id }}/recordings/{{ rec.recording_id }}/audio"></audio>
-        {% elif rec.state == 'READY' %}<span class="muted">만료되어 재생할 수 없습니다.</span>{% endif %}
-        <small>재생 기한 <time datetime="{{ rec.expires_at }}">{{ rec.expires_at }}</time></small></div>
+        {% if rec.playable %}<audio controls preload="none" src="/staff/cases/{{ case.case_id }}/recordings/{{ rec.recording_id }}/audio"></audio>{% endif %}
+        {% if rec.ai and rec.state in ('PENDING','READY') %}<p data-call-summary="{{ rec.recording_id }}" {% if not rec.summary %}hidden{% endif %}><strong>통화 요약</strong> <span>{{ rec.summary or '' }}</span></p>{% endif %}</div>
       {% else %}<p class="muted">등록된 녹취가 없습니다.</p>{% endfor %}
     </details>
 </div>

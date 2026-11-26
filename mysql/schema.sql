@@ -1,3 +1,4 @@
+-- 상담원·관리자의 로그인 계정과 권한
 CREATE TABLE staff_account (
     staff_id CHAR(36) PRIMARY KEY,
     login_id VARCHAR(80) NOT NULL UNIQUE,
@@ -6,6 +7,7 @@ CREATE TABLE staff_account (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 ) ENGINE=InnoDB;
 
+-- 직원 로그인 세션과 만료 시각
 CREATE TABLE staff_session (
     token_hash BINARY(32) PRIMARY KEY,
     staff_id CHAR(36) NOT NULL,
@@ -14,6 +16,7 @@ CREATE TABLE staff_session (
     INDEX (expires_at)
 ) ENGINE=InnoDB;
 
+-- 상담 한 건의 접수·배정·종결 정보
 CREATE TABLE support_case (
     case_id CHAR(36) PRIMARY KEY,
     channel ENUM('WEB','PHONE') NOT NULL,
@@ -31,6 +34,7 @@ CREATE TABLE support_case (
     INDEX (content_expires_at, content_purged_at)
 ) ENGINE=InnoDB;
 
+-- 상담 담당자 배정·변경 이력
 CREATE TABLE assignment_history (
     assignment_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     case_id CHAR(36) NOT NULL,
@@ -44,6 +48,7 @@ CREATE TABLE assignment_history (
     FOREIGN KEY (changed_by) REFERENCES staff_account(staff_id)
 ) ENGINE=InnoDB;
 
+-- 채팅 입장용 일회용 코드의 해시와 사용 시각
 CREATE TABLE entry_code (
     code_hash BINARY(32) PRIMARY KEY,
     case_id CHAR(36) NOT NULL,
@@ -53,6 +58,7 @@ CREATE TABLE entry_code (
     INDEX (expires_at)
 ) ENGINE=InnoDB;
 
+-- 문의 방문자와 채팅 고객의 세션
 CREATE TABLE customer_session (
     token_hash BINARY(32) PRIMARY KEY,
     case_id CHAR(36),
@@ -61,6 +67,7 @@ CREATE TABLE customer_session (
     INDEX (expires_at)
 ) ENGINE=InnoDB;
 
+-- 상담별 채팅 메시지와 재전송 확인용 ID
 CREATE TABLE chat_message (
     message_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     case_id CHAR(36) NOT NULL,
@@ -73,6 +80,7 @@ CREATE TABLE chat_message (
     UNIQUE (case_id, client_message_id)
 ) ENGINE=InnoDB;
 
+-- 전화 응대 내용과 녹취 동의 상태
 CREATE TABLE phone_response (
     case_id CHAR(36) PRIMARY KEY,
     call_at DATETIME(6),
@@ -86,6 +94,7 @@ CREATE TABLE phone_response (
     FOREIGN KEY (consent_by) REFERENCES staff_account(staff_id)
 ) ENGINE=InnoDB;
 
+-- 녹취 파일의 저장 위치와 상태. expires_at은 수신 중인 AI 통화의 유휴 기한이다.
 CREATE TABLE recording (
     recording_id CHAR(36) PRIMARY KEY,
     case_id CHAR(36),
@@ -97,7 +106,8 @@ CREATE TABLE recording (
     storage_bucket VARCHAR(63),
     size_bytes INT UNSIGNED,
     sha256 BINARY(32),
-    expires_at DATETIME(6) NOT NULL,
+    expires_at DATETIME(6),
+    call_started_at DATETIME(6),
     stored_at DATETIME(6),
     destroyed_at DATETIME(6),
     FOREIGN KEY (case_id) REFERENCES support_case(case_id),
@@ -106,6 +116,7 @@ CREATE TABLE recording (
     INDEX (expires_at, state)
 ) ENGINE=InnoDB;
 
+-- 상담 조회·녹취 재생 등 작업의 주체와 결과
 CREATE TABLE audit_event (
     event_id BIGINT PRIMARY KEY AUTO_INCREMENT,
     action VARCHAR(32) NOT NULL,

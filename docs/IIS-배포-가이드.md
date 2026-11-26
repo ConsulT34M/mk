@@ -6,7 +6,7 @@ Windows Server 2022 x64 한 대에서 IIS 10, Flask, MySQL 8.4를 운영하는 �
 브라우저 → IIS (HTTPS 443) → Waitress / Flask (127.0.0.1:8000) → MySQL (127.0.0.1:3306)
 ```
 
-Windows 서비스 `MKDeskWeb`은 직원·고객 화면을 제공한다. `MKDeskPurge`는 만료된 상담 내용, 녹취와 세션을 30초 간격으로 정리하고, 별도로 새 AI 녹취의 요약 요청을 처리한다. 아래 명령은 대상 서버의 관리자 권한 Windows PowerShell에서 실행한다.
+Windows 서비스 `MKDeskWeb`은 직원·고객 화면을 제공한다. `MKDeskPurge`는 삭제 요청을 받은 녹취와 만료된 상담 내용·세션을 30초 간격으로 정리하고, 별도로 새 AI 녹취의 요약 요청을 처리한다. 아래 명령은 대상 서버의 관리자 권한 Windows PowerShell에서 실행한다.
 
 ## 1. 서버와 소스 준비
 
@@ -98,15 +98,14 @@ DB 작업을 마치면 이 PowerShell 창을 닫는다. 관리자 로그인 후 
 
 새 관리자 PowerShell 창에서 다음 블록을 실행한다. 앱 전용 DB 비밀번호와 파트너 연동용 비밀 토큰을 입력한다. 기존 거래소 연동을 이어갈 때는 거래소가 사용 중인 `PARTNER_TOKEN`을 입력한다. 신규 연동이면 비밀번호 관리 도구에서 임의 토큰을 생성해 거래소와 같은 값으로 설정한다.
 
-녹취와 종결 상담 내용의 프로젝트 기본 보관 시간은 각각 5분이다. 여기서는 실제 운영 기간을 분 단위로 입력한다. 변경 전에 저장된 건에는 DB에 기록된 기존 만료 시각이 적용되므로, 이전 시 `MKDeskPurge`를 시작하기 전에 해당 시각을 확인한다.
+녹취와 요약은 관리자 삭제 또는 동의 철회 시까지 보관한다. 종결 상담 본문과 메모는 기본 5분간 보관하며, 아래에서 운영 기간을 분 단위로 설정한다. 기존 상담 본문에는 DB에 기록된 만료 시각이 적용된다.
 
 ```powershell
 function Read-MkSecret([string]$label) {
     [Net.NetworkCredential]::new('', (Read-Host $label -AsSecureString)).Password
 }
-[int]$mkAudioMinutes = Read-Host '녹취 보관 기간(분)'
 [int]$mkCaseMinutes = Read-Host '종결 상담 내용 보관 기간(분)'
-if ($mkAudioMinutes -lt 1 -or $mkCaseMinutes -lt 1) { throw '양의 분 단위 값을 입력하세요.' }
+if ($mkCaseMinutes -lt 1) { throw '양의 분 단위 값을 입력하세요.' }
 $mkSettings = [ordered]@{
     MYSQL_HOST = '127.0.0.1'
     MYSQL_DATABASE = 'tm_portal'
@@ -114,7 +113,6 @@ $mkSettings = [ordered]@{
     MYSQL_PASSWORD = Read-MkSecret 'tm_app 비밀번호'
     PARTNER_TOKEN = Read-MkSecret '거래소 연동 토큰'
     RECORDING_DIR = 'C:\MKDesk\recordings'
-    RECORDING_RETENTION_MINUTES = [string]$mkAudioMinutes
     CASE_RETENTION_MINUTES = [string]$mkCaseMinutes
     OPENAI_API_KEY = Read-MkSecret 'AI 음성 상담 키(미사용 시 Enter)'
 }

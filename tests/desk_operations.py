@@ -66,17 +66,26 @@ for client, channel in [(worker,"WEB"),(peer,"PHONE"),(outside,"WEB")]:
     channel_tab = "calls" if channel == "PHONE" else "chats"
     list_path = "/portal/updates?tab=" + channel_tab
     assert case_id in client.get(list_path + "&status=active").json["html"]
-    assert case_id not in client.get(list_path + "&status=closed").json["html"]
+    assert case_id not in client.get("/portal/updates?tab=closed").json["html"]
     if channel=="PHONE":
+        assert client.get(path).json["phone_response"]["call_at"] is None
         post(client, path+"/phone-response", dict(call_at=datetime.now(timezone.utc).isoformat(),inquiry="검증",guidance="안내",
              followup_required=False,consent_state="REFUSED",talk_seconds=75,call_direction="OUTBOUND"))
     post(client, path+"/close", dict(result_note="종결",outcome="RESOLVED"))
     counts["종결"] += 1
     assert dashboard_counts() == counts
-    recent = client.get(list_path + "&status=all").json
-    assert case_id in recent["html"] and case_id in recent["history_html"]
-    assert case_id not in client.get(list_path + "&status=active").json["html"]
-    assert f'data-tab="{channel_tab}"' in page(client, "/portal/" + case_id + "?tab=" + channel_tab + "&status=closed")
+    for suffix in ("", "&status=all", "&status=active", "&status=closed"):
+        active = client.get(list_path + suffix).json
+        assert case_id not in active["html"] and not active["history_html"]
+    assert case_id not in page(client, "/portal?tab=" + channel_tab + "&status=all")
+    archived = client.get("/portal/updates?tab=closed").json
+    assert case_id in archived["html"] and case_id in archived["history_html"]
+    for selected_channel in ("PHONE", "WEB"):
+        filtered = client.get("/portal/updates?tab=closed&channel=" + selected_channel).json
+        assert (case_id in filtered["html"]) == (selected_channel == channel)
+        assert (case_id in filtered["history_html"]) == (selected_channel == channel)
+    closed_detail = page(client, "/portal/" + case_id + "?tab=" + channel_tab + "&status=closed")
+    assert 'data-tab="closed"' in closed_detail and f'data-channel="{channel}"' in closed_detail
     if channel=="PHONE":
         phone_id=case_id
 chart_url = "/portal/updates?tab=dashboard"
@@ -98,7 +107,8 @@ with app.app_context():
     db().commit()
 assert phone_id in page(peer,"/portal?tab=recordings"+q)
 assert phone_id not in page(worker,"/portal?tab=recordings"+q)
-assert phone_id not in worker.get("/portal/updates?tab=calls&status=all").json["history_html"]
+assert phone_id not in worker.get("/portal/updates?tab=closed").json["html"]
+assert phone_id not in worker.get("/portal/updates?tab=closed").json["history_html"]
 with app.app_context():
     name=one("SELECT name FROM staff_team WHERE team_id=%s",(team,))["name"]
 post(admin, "/admin/teams/"+team, dict(name=name,previous_name=name,previous=previous,members=[]),409)

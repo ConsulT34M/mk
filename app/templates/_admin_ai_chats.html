@@ -1,0 +1,21 @@
+<section class="board-panel admin-panel">
+  <div class="section-title"><h3>{{ staff_icon('chat') }}RKX AI 채팅 내역</h3></div>
+  <div class="table-scroll"><table class="admin-table"><thead><tr><th>최근 대화</th><th>고객 번호</th><th>첫 문의</th></tr></thead><tbody>
+  {% for s in ai_sessions %}
+    <tr><td>{{ time_at(s.updated_at|utcstamp) }}</td><td>#{{ s.subject_ref[:8]|upper }}</td>
+      <td class="wrap-cell"><a class="case-ref" href="{{ url_for('management.index',tab=tab,page=page,chat=s.chat_id,_anchor='ai-transcript') }}">{{ s.subject|truncate(80) }}</a></td></tr>
+  {% else %}<tr><td colspan="3" class="admin-empty">아직 AI 채팅 상담이 없습니다.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if page > 1 or more %}<nav class="admin-actions pager" aria-label="대화 목록 페이지">
+    {% if page > 1 %}<a class="admin-btn" href="{{ url_for('management.index',tab=tab,page=page-1) }}">이전</a>{% endif %}
+    {% if more %}<a class="admin-btn" href="{{ url_for('management.index',tab=tab,page=page+1) }}">다음</a>{% endif %}</nav>{% endif %}
+</section>
+{% if ai_detail %}<section id="ai-transcript" class="board-panel admin-panel">
+  <div class="section-title"><h3>대화 내용</h3><span>#{{ ai_detail.subject_ref[:8]|upper }}</span></div>
+  {% if not older %}<div class="ai-turn"><strong>AI 상담원</strong><p>{{ ai_detail.greeting }}</p></div>{% endif %}
+  {% for t in turns %}<div class="ai-turn"><strong>고객</strong> {{ time_at(t.created_at|utcstamp) }}<p>{{ t.question }}</p>
+    <strong>AI 상담원</strong><p>{{ t.answer }}</p></div>{% endfor %}
+  {% if older or turn_page > 1 %}<nav class="admin-actions pager" aria-label="대화 내용 페이지">
+    {% if older %}<a class="admin-btn" href="{{ url_for('management.index',tab=tab,page=page,chat=ai_detail.chat_id,turn_page=turn_page+1,_anchor='ai-transcript') }}">이전 대화</a>{% endif %}
+    {% if turn_page > 1 %}<a class="admin-btn" href="{{ url_for('management.index',tab=tab,page=page,chat=ai_detail.chat_id,turn_page=turn_page-1,_anchor='ai-transcript') }}">최근 대화</a>{% endif %}</nav>{% endif %}
+</section>{% endif %}

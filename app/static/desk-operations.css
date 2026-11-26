@@ -148,6 +148,14 @@ summary { color: #335466; }
 .distribution-key :is(thead,tfoot) { color: #405b6b; background: #edf3f7; font-weight: 700; }
 .legend-swatch { margin-right: 5px; }
 .section-title h3 > .icon { margin-right: 6px; vertical-align: -2px; }
+.staff-board .board-editor { display: grid; gap: 10px; padding: 12px; }
+.board-editor label { display: grid; gap: 4px; font-weight: 600; }
+.board-editor :is(input,textarea) { width: 100%; font-weight: 400; }
+.staff-board :is(h3,td), .board-body { overflow-wrap: anywhere; }
+.staff-board td:first-child:not([colspan]) { width: 60%; text-align: left; }
+.board-byline { padding: 8px 12px; color: var(--muted); font-size: 12px; }
+.board-body { padding: 4px 12px 14px; white-space: pre-wrap; }
+.board-tools { padding: 8px 12px; border-top: 1px solid var(--grid); }
 .published-notice { border-bottom: 1px solid var(--grid); }
 .published-notice summary { padding: 7px 10px; overflow-wrap: anywhere; }
 .published-notice summary strong { margin-right: 10px; }

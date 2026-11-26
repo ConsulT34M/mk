@@ -4,7 +4,8 @@
     <label>상담원 이름<input name="display_name" maxlength="60" value="{{ editor.display_name or '' }}" placeholder="미입력 시 아이디 표시"></label>
     <label>직원 아이디<input name="login_id" maxlength="80" value="{{ editor.login_id or '' }}" required autocomplete="off"></label>
     <label>{{ '새 비밀번호 (변경 시)' if editor else '비밀번호' }}<input type="password" name="password" maxlength="512" autocomplete="new-password" {% if not editor %}required{% endif %}></label>
-    {% for key,label in periods %}<label>{{ label }} 목표 (건)<input name="{{ key }}" type="number" min="0" max="99999" value="{{ editor[key] if editor and editor[key] is not none else '' }}" placeholder="미설정"></label>{% endfor %}
+    {% set goals = editor or {'daily': 10, 'weekly': 50, 'monthly': 200} %}
+    {% for key,label in periods %}<label>{{ label }} 목표 (건)<input name="{{ key }}" type="number" min="0" max="99999" value="{{ goals[key] if goals[key] is not none else '' }}" placeholder="미설정"></label>{% endfor %}
     <button class="admin-primary">저장</button><a class="admin-btn" href="{{ url_for('management.index',tab='agents',filter=group) }}">취소</a>
   </form>
   {% if editor %}<form class="account-status" method="post" action="{{ url_for('management.account_status',staff_id=editor.staff_id) }}" data-action="admin" data-return="{{ url_for('management.index',tab='agents') }}" {% if editor.is_active %}data-confirm="이 계정을 삭제할까요? 진행 중인 상담은 대기열로 돌아가고 종결 기록은 보존됩니다."{% endif %}>

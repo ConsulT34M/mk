@@ -1,14 +1,16 @@
+import hmac
 import json
 import os
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from flask import Blueprint, request
+from flask import Blueprint, current_app, request
 
-from .cases import intake_case
-from .common import INQUIRY_COOKIE, ApiError, customer_session, digest, payload
+from .cases import intake_case, partner
+from .common import INQUIRY_COOKIE, ApiError, call_datetime, customer_session, deadline, digest, payload, uuid_field
 from .db import audit, new_id
+from .queries import chat as chat_queries
 from .queries import recordings as recording_queries
 from .queries import voice as voice_queries
 from .voice_recording import append_voice, finalize_voice, reserve_voice
@@ -18,10 +20,17 @@ from .voice_recording import append_voice, finalize_voice, reserve_voice
 voice = Blueprint("voice", __name__, url_prefix="/inquiry/voice")
 
 
-def client_secret():
+@voice.get("/ringback")
+def ringback():
+    policy = voice_queries.policy()
+    if policy["enabled"] and policy["ringback_enabled"]:
+        return current_app.send_static_file("voice-ringback.mp3")
+    return "", 204
+
+
+def client_secret(policy):
     # 운영 설정과 서버 키를 확인한 뒤 브라우저가 음성 서비스에 연결할 단기 자격 증명을 요청한다.
     # 모델·목소리·상담 원칙과 상담원 접수 도구의 형식은 서버에서 결정한다.
-    policy = voice_queries.policy()
     if not policy["enabled"]:
         raise ApiError("VOICE_DISABLED")
     key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -73,7 +82,21 @@ def client_secret():
     return result["value"]
 
 
-def visitor_hash(*, lock=False):
+def rkx_subject():
+    if "X-Support-Subject" in request.headers or "Authorization" in request.headers:
+        partner()
+        return uuid_field(request.headers.get("X-Support-Subject"))
+
+
+def visitor_hash(*, lock=False, start=False):
+    subject = rkx_subject()
+    if subject:
+        owner = hmac.digest(os.environ["PARTNER_TOKEN"].encode(), ("rkx-voice:" + subject).encode(), "sha256")
+        if start:
+            voice_queries.extend_rkx_session(owner, deadline("CHAT_SESSION_MINUTES", 60))
+        if lock and not chat_queries.session(owner, lock=True):
+            raise ApiError("VOICE_SESSION_NOT_FOUND")
+        return owner
     # 유효한 문의 방문 세션인지 먼저 확인하고, 통화 소유자와 대조할 쿠키 해시를 반환한다.
     # 세션을 연결하거나 수정하는 요청은 방문 세션 행도 잠글 수 있다.
     if not customer_session(INQUIRY_COOKIE, lock=lock):
@@ -90,12 +113,16 @@ def start():
     if not isinstance(consent, bool) or not isinstance(summary_consent, bool) or (summary_consent and not consent):
         raise ApiError("INVALID_INPUT")
     visitor_hash()
-    secret = client_secret()
+    policy = voice_queries.policy()
+    secret = client_secret(policy)
     # 외부 서비스 응답을 기다리는 동안에는 방문 세션을 잠그지 않는다. 발급을 마친 뒤
     # 방문 세션을 다시 확인하고 잠가 이 브라우저와 새 음성 세션을 연결한다.
-    owner = visitor_hash(lock=True)
+    owner = visitor_hash(lock=True, start=True)
     voice_id = new_id()
-    voice_queries.create_session(voice_id, owner, new_id())
+    subject = rkx_subject()
+    voice_queries.create_session(voice_id, owner, subject or new_id())
+    if subject:
+        voice_queries.log_rkx_start(voice_id, subject)
     if consent:
         # 동의한 경우만 녹취 행을 예약한다. 요약에도 동의했으면 작업을 미리 등록해 두고
         # 실제 요약은 녹취가 READY가 된 뒤 별도 작업자가 실행한다.
@@ -103,20 +130,29 @@ def start():
         if summary_consent:
             voice_queries.add_summary(voice_id)
     audit("VOICE_RECORDING_AGREED" if consent else "VOICE_RECORDING_REFUSED", "customer", recording_id=voice_id)
-    return {"voice_id": voice_id, "client_secret": secret}, 201
+    return {"voice_id": voice_id, "client_secret": secret, "greeting": policy["greeting"]}, 201
+
+
+@voice.post("/sessions/<uuid:voice_id>/connected")
+def connected(voice_id):
+    if not voice_queries.owned_session(voice_id, visitor_hash(lock=True)):
+        raise ApiError("VOICE_SESSION_NOT_FOUND")
+    voice_queries.log_rkx_connected(voice_id)
+    return "", 204
 
 
 @voice.post("/sessions/<uuid:voice_id>/handoff")
 def handoff(voice_id):
     # 문의 쿠키의 소유자와 통화 ID가 함께 일치해야 상담원 대기 티켓을 접수할 수 있다.
-    payload()
+    data = payload()
     owner = visitor_hash(lock=True)
     session = voice_queries.owned_session(voice_id, owner)
     if not session:
         raise ApiError("VOICE_SESSION_NOT_FOUND")
     # 음성 세션 ID 자체를 접수 요청 키로 쓴다. 같은 통화에서 인계 도구를 다시 호출해도
     # 최초 전화 티켓을 반환한다. 최초 접수 때 이미 예약된 AI 녹취가 있으면 그 티켓에 연결한다.
-    case_id, created = intake_case(session["subject_ref"], voice_id, "PHONE")
+    call_at = call_datetime(data["call_at"]) if "call_at" in data else None
+    case_id, created = intake_case(session["subject_ref"], voice_id, "PHONE", call_at=call_at)
     if created:
         recording_queries.link_voice_case(voice_id, case_id)
     return {"case_id": case_id}, 201 if created else 200
@@ -141,8 +177,11 @@ def receive_audio(voice_id, offset):
     item = owned_recording(voice_id)
     if not item:
         raise ApiError("RECORDING_CONSENT_REQUIRED")
+    started_at = None
+    if offset == 0 and "X-Call-Started-At" in request.headers:
+        started_at = call_datetime(request.headers["X-Call-Started-At"])
     try:
-        append_voice(item, offset, data)
+        append_voice(item, offset, data, started_at)
     except OSError:
         raise ApiError("RECORDING_STORE_FAILED") from None
     return "", 204
@@ -159,6 +198,8 @@ def end(voice_id):
             return "", 204
         raise
     voice_queries.end_session(voice_id)
+    if rkx_subject():
+        voice_queries.log_rkx_end(voice_id)
     # 녹취에 동의한 통화는 수신한 음성을 WAV로 확정하고 실제 저장 여부를 JSON으로 알려 준다.
     # 녹취 예약이 없는 통화는 응답 본문 없이 종료한다.
     try:

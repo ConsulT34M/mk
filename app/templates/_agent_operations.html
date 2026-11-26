@@ -8,7 +8,8 @@
   {{ stats(report,dates,tab,scope=scope,scope_label=(team.name ~ ' · 현재 소속 기준') if scope=='team' else (user.display_name or user.login_id)) }}
   {% else %}<h3>내 통화 내역</h3><form class="report-filter" method="get"><input type="hidden" name="tab" value="recordings">{{ range_fields(dates) }}<button class="admin-btn">조회</button></form>
   <div class="table-scroll"><table class="admin-table"><thead><tr><th>통화 일시</th><th>문의 유형 / 상담 번호</th><th>구분</th><th>통화 시간</th><th>녹취</th></tr></thead><tbody>
-    {% for c in calls %}<tr><td><time datetime="{{ c.call_time|utcstamp }}">{{ c.call_time }}</time></td><td>{{ topic_names.get(c.inquiry_type,'미분류') }} · <a href="{{ url_for('detail_page',case_id=c.case_id) }}">#{{ c.case_id[:8]|upper }}</a></td><td>{{ direction_names.get(c.call_direction,'미기록') }}</td><td>{{ c.talk_seconds|duration }}</td>
-    <td>{% for id,label in c.clips %}<details class="clip"><summary class="admin-btn">{{ label }}</summary><audio controls preload="none" aria-label="{{ label }}" src="{{ url_for('recordings.play',case_id=c.case_id,recording_id=id) }}"></audio></details>{% else %}재생할 녹취 없음{% endfor %}</td></tr>
+    {% for c in calls %}<tr><td>{% if c.call_time %}<time datetime="{{ c.call_time|utcstamp }}">{{ c.call_time }}</time>{% else %}미기록{% endif %}</td><td>{{ topic_names.get(c.inquiry_type,'미분류') }} · <a href="{{ url_for('detail_page',case_id=c.case_id) }}">#{{ c.case_id[:8]|upper }}</a></td><td>{{ direction_names.get(c.call_direction,'미기록') }}</td><td>{{ c.talk_seconds|duration }}</td>
+    <td>{% for id,label,summary in c.clips %}<details class="clip"><summary class="admin-btn">{{ label }}</summary><audio controls preload="none" aria-label="{{ label }}" src="{{ url_for('recordings.play',case_id=c.case_id,recording_id=id) }}"></audio>
+      {% if summary %}<p><strong>통화 요약</strong> {{ summary|request_line }}</p>{% endif %}</details>{% else %}재생할 녹취 없음{% endfor %}</td></tr>
     {% else %}<tr><td colspan="5" class="admin-empty">선택한 기간에 담당한 통화가 없습니다.</td></tr>{% endfor %}</tbody></table></div>{% endif %}
   </section>

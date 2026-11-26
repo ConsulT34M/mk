@@ -1,4 +1,8 @@
 #admin-dashboard { display: grid; gap: 12px; min-width: 0; }
+.admin-nav-group > summary { cursor: pointer; }
+.admin-nav-group > summary:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+.ai-turn { border-top: 1px solid #d6e1e9; padding: 12px 4px; }
+.ai-turn p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 12px; }
 .admin-desk .section-title, .admin-desk .board-panel > h3 { min-height: 30px; color: #193e56; }
 .admin-desk .report-filter { background: #e4f0f8; }
 .admin-desk .section-title .report-filter { background: none; }

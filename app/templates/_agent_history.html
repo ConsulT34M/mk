@@ -1,9 +1,8 @@
-<table class="admin-table"><thead><tr><th>접수 일시</th><th>상담 번호</th><th>채널</th><th>문의 유형</th><th>처리 결과</th><th>녹취</th></tr></thead><tbody>
+<table class="admin-table"><thead><tr><th>접수 일시</th><th>상담 번호</th><th>채널</th><th>문의 유형</th><th>처리 결과</th></tr></thead><tbody>
 {% for item in recent_cases %}<tr>
   <td><time datetime="{{ item.opened_at }}">{{ item.opened_at[:16]|replace('T',' ') }}</time></td>
   <td><a class="case-ref" href="{{ url_for('detail_page',case_id=item.case_id) }}">#{{ item.case_id[:8]|upper }}</a></td>
   <td>{{ '채팅' if item.channel=='WEB' else '통화' }}</td><td>{{ topic_names.get(item.inquiry_type,'미분류') }}</td>
   <td>{{ outcome_names.get(item.outcome,'미기록') }}</td>
-  <td>{% if item.clip_id %}<details class="clip"><summary class="admin-btn">녹취 듣기</summary><audio controls preload="none" aria-label="{{ item.case_id[:8] }} 통화 녹취" src="{{ url_for('recordings.play',case_id=item.case_id,recording_id=item.clip_id) }}"></audio></details>{% else %}—{% endif %}</td>
-</tr>{% else %}<tr><td colspan="6" class="admin-empty">종결한 상담이 없습니다.</td></tr>{% endfor %}
+</tr>{% else %}<tr><td colspan="5" class="admin-empty">종결한 상담이 없습니다.</td></tr>{% endfor %}
 </tbody></table>

@@ -400,10 +400,10 @@ python -m venv C:\MKDesk\venv
 $mkPython = 'C:\MKDesk\venv\Scripts\python.exe'
 & $mkPython -m pip install --upgrade pip
 & $mkPython -m pip install -r C:\MKDesk\src\requirements.txt
-& $mkPython -m pip install waitress boto3
+& $mkPython -m pip install waitress
 ```
 
-Windows에서는 Gunicorn 대신 Waitress를 사용한다. S3 저장 구현에는 AWS SDK인 `boto3`가 필요하므로 애플리케이션 코드 변경과 함께 `requirements.txt`에도 버전을 고정해 추가한다. 서버에서만 수동 설치하고 의존성 파일에서 누락하지 않는다.
+Windows에서는 Waitress로 실행한다. `requirements.txt`를 설치하면 `boto3`와 `python-dotenv`도 설치된다.
 
 ## 10. 애플리케이션 설정
 
@@ -419,9 +419,8 @@ MYSQL_USER=tm_app
 MYSQL_PASSWORD=강력한-비밀번호
 SECRET_KEY=충분히-긴-임의값
 S3_RECORDING_BUCKET=mkdesk-recordings-prod-고유값
-S3_RECORDING_PREFIX=files/
 AWS_REGION=ap-northeast-2
-RECORDING_TEMP_DIR=C:\MKDesk\temp
+RECORDING_DIR=C:\MKDesk\temp
 ```
 
 주의 사항:
@@ -616,7 +615,7 @@ curl.exe http://localhost/health
 - 시작 방식: Automatic
 - 장애 시 재시작
 - 로그 디렉터리: `C:\MKDesk\logs`
-- DB, SECRET_KEY, S3 버킷·리전, RECORDING_TEMP_DIR 설정
+- DB, SECRET_KEY, S3 버킷·리전, RECORDING_DIR 설정
 
 서비스를 설치하고 시작한 뒤 확인한다.
 
@@ -758,7 +757,7 @@ mkdesk-recordings-staging-고유값
 s3://mkdesk-recordings-prod-고유값/files/<recording_id>.wav
 ```
 
-현재 데이터베이스의 `recording.object_key`에는 버킷 이름이나 전체 URL이 아니라 `files/<recording_id>.wav`만 저장한다. 버킷은 환경 설정으로 분리해야 DB를 다른 환경에 복원하기 쉽다.
+`recording.object_key`에는 `files/<recording_id>.wav`를, `recording.storage_bucket`에는 녹취 예약 시 선택한 버킷명을 저장한다. 로컬 녹취의 버킷명은 NULL이다.
 
 ### 18.2 암호화 선택
 
@@ -815,50 +814,23 @@ aws s3api head-bucket --bucket 'mkdesk-recordings-prod-고유값'
 
 AWS CLI는 점검용일 뿐이며 애플리케이션은 `boto3`의 기본 자격 증명 체인을 통해 EC2 역할을 자동 사용한다.
 
-### 18.4 애플리케이션 코드 변경
+### 18.4 녹취 저장소 설정
 
-현재 코드는 로컬 파일 저장 방식이므로 환경변수만 S3로 바꾸면 동작하지 않는다. 배포 전에 다음 변경이 완료돼야 한다.
-
-#### `app/recording_store.py`
-
-- `_path()`와 로컬 파일 쓰기를 S3 클라이언트 호출로 교체한다.
-- `put_audio(key, source)`는 `upload_fileobj` 또는 `put_object`로 객체를 저장한다.
-- `send_audio(key)`는 `get_object`의 `Body`를 인증된 Flask 응답으로 스트리밍한다.
-- `delete_audio(key)`는 `delete_object`를 호출한다.
-- 버킷 이름, 리전, 암호화 설정은 환경변수에서 읽는다.
-- 객체 키는 현재 형식인 `files/<recording_id>.wav`를 유지한다.
-- `NoSuchKey`, 접근 거부, 네트워크 오류를 구분해 기록하되 민감정보를 로그에 남기지 않는다.
-
-현재 재생 경로에는 권한 확인과 감사 기록이 있으므로 S3 객체를 퍼블릭 URL로 노출하지 않는다. 사전 서명 URL로 전환하려면 짧은 만료 시간, 다운로드 헤더, 감사 시점, URL 유출 위험을 별도로 설계한다.
-
-#### `app/voice_recording.py`
-
-음성 세션은 여러 조각을 순서대로 받기 때문에 완성 전 `.part` 파일은 로컬 임시 디렉터리에 둘 수 있다.
-
-- `RECORDING_TEMP_DIR` 아래에 `.part` 파일을 생성한다.
-- 완성 시 WAV를 S3로 업로드한 뒤 로컬 `.part` 파일을 삭제한다.
-- 실패하거나 만료된 세션의 `.part` 파일도 정리한다.
-- 동일 ID 재시도와 중복 업로드가 안전하도록 객체 키를 결정적으로 유지한다.
-- 임시 디렉터리에는 MKDeskWeb 서비스 계정만 접근하도록 ACL을 제한한다.
-
-로컬 임시 파일은 원본 보관소가 아니므로 EC2 재생성 시 소실될 수 있다. 업로드가 끝난 READY 녹취는 반드시 S3에서 조회돼야 한다.
-
-#### 의존성과 설정
-
-`requirements.txt`에 `boto3`를 버전 고정하여 추가하고 다음 환경변수를 서비스에 전달한다.
+`C:\MKDesk\src\.env` 또는 웹·유지보수 서비스 환경에 버킷명과 리전을 지정한다. 서비스 환경변수가 우선한다. 새 녹취는 버킷명이 있으면 S3, 비어 있으면 로컬에 저장한다.
 
 ```text
 S3_RECORDING_BUCKET=mkdesk-recordings-prod-고유값
-S3_RECORDING_PREFIX=files/
 AWS_REGION=ap-northeast-2
-RECORDING_TEMP_DIR=C:\MKDesk\temp
+RECORDING_DIR=C:\MKDesk\temp
 ```
 
-코드에서 `RECORDING_DIR`을 더 이상 사용하지 않게 된 것을 검색과 테스트로 확인한 후 서비스 설정에서도 제거한다.
+기존 설치는 새 의존성을 설치하고 `flask --app app init-admin`으로 녹취 버킷 열을 추가한 뒤 웹·유지보수 서비스를 재시작한다. 녹취 중인 `.part`는 로컬 `RECORDING_DIR`에 쓴다. 서비스 계정에 이 폴더의 수정 권한을 준다. 기존 로컬 녹취가 있으면 해당 디렉터리를 계속 사용한다.
+
+완성한 WAV는 `put_object`로 업로드한다. 요약과 재생은 DB에 기록된 버킷과 키를 사용한다. Flask가 권한과 삭제 상태를 확인하고, 브라우저가 요청한 구간을 S3에서 읽어 전송한다. 정리 작업은 삭제 요청을 받은 키에 `delete_object`를 호출한다.
 
 ### 18.5 수명주기와 삭제 정책
 
-애플리케이션은 DB의 만료 시각에 따라 S3 객체를 삭제하고 DB 상태를 `DESTROYED`로 변경해야 한다. S3 수명주기 규칙은 애플리케이션 정리 실패에 대비한 보조 통제 수단으로 사용한다.
+녹취는 관리자 삭제 또는 동의 철회 시까지 보관한다. 정리 작업은 `DELETE_PENDING`인 녹취의 객체를 삭제한 뒤 DB 상태를 `DESTROYED`로 바꾼다. 녹취 경로 `files/`에는 현재 버전을 기간 만료시키는 S3 수명주기 규칙을 적용하지 않는다.
 
 - 보존 기간은 개인정보·녹취 보존 정책과 일치시킨다.
 - Versioning을 사용하면 삭제 마커만 생성되고 이전 버전이 남을 수 있다.

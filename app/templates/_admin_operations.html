@@ -19,9 +19,18 @@
   {% else %}<p class="table-note">팀을 만든 뒤 상담원을 배정할 수 있습니다.</p>{% endif %}</section>
 {% if team %}<section class="board-panel admin-panel"><h3>팀 처리 통계</h3>{{ stats(report,dates,tab,team.team_id,scope_label=team.name ~ ' · 현재 소속 기준') }}</section>{% endif %}
 {% else %}
+<section class="board-panel admin-panel"><h3>AI 채팅 상담 설정</h3>
+  <form class="admin-stack" method="post" data-action="admin" data-ai-chat-policy action="{{ url_for('management.save_ai_chat_policy') }}">
+    <label class="inline-check"><input type="checkbox" name="enabled" {% if chat_policy.enabled %}checked{% endif %}>AI 채팅 상담 사용</label>
+    <label>첫 인사말<textarea name="greeting" rows="2" maxlength="200" required>{{ chat_policy.greeting }}</textarea></label>
+    <label>답변 방식<select name="reply_style"><option value="brief" {% if chat_policy.reply_style=='brief' %}selected{% endif %}>간결하게</option><option value="steps" {% if chat_policy.reply_style=='steps' %}selected{% endif %}>단계별 안내</option></select></label>
+    <button class="admin-primary">채팅 설정 저장</button>
+  </form></section>
 <section class="board-panel admin-panel"><h3>AI 음성 상담 설정</h3>
   <form class="admin-stack" method="post" data-action="admin" data-ai-policy action="{{ url_for('management.save_ai_policy') }}">
     <label class="inline-check"><input type="checkbox" name="enabled" {% if policy.enabled %}checked{% endif %}>AI 음성 상담 사용</label>
+    <label class="inline-check"><input type="checkbox" name="ringback_enabled" {% if policy.ringback_enabled %}checked{% endif %}>연결 대기음 재생</label>
+    <label>연결 후 첫 인사말<textarea name="greeting" rows="2" maxlength="200" required>{{ policy.greeting }}</textarea></label>
     <label>추가 응대 지침<textarea name="instructions" rows="4" maxlength="600">{{ policy.instructions }}</textarea></label>
     <label class="inline-check"><input type="checkbox" name="offer_handoff" {% if policy.offer_handoff %}checked{% endif %}>해결이 어려운 문의에는 상담원 연결 제안</label><button class="admin-primary">설정 저장</button></form></section>
 {% if policy.enabled %}<section class="board-panel admin-panel"><h3>오늘 시작한 AI 음성 상담</h3><p>시작 {{ voice_counts.sessions }}건 · 이 중 상담원 인계 {{ voice_counts.handed }}건</p></section>{% endif %}

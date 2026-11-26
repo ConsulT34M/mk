@@ -4,32 +4,50 @@
 {% set home_url = url_for('management.index') if is_admin else url_for('queue_page', tab='dashboard') %}
 {% set endpoint = 'management.index' if is_admin else 'queue_page' %}
 {% set active_menu = tab %}
+{% set submenus = {} %}
 {% if is_admin %}
   {% set menu = [
-    ('상담 운영', [('overview','대시보드','chart'),('calls','통화','phone'),('ai-calls','AI 통화','waveform'),('chats','채팅','chat')]),
-    ('관리', [('agents','계정 관리','person'),('org','조직','team'),('notices','공지사항','notice'),('ai','AI 설정','settings'),('audit','변경 이력','history')])
+    ('상담 운영', [('overview','대시보드','chart'),('calls','통화','phone'),('chats','채팅','chat')]),
+    ('AI', [('ai-calls','AI 통화','waveform'),('ai-chats','AI 채팅','chat'),('ai','AI 설정','settings')]),
+    ('관리', [('agents','계정 관리','person'),('org','조직','team'),('notices','공지사항','notice'),('board','게시판','list'),('audit','변경 이력','history')])
   ] %}
   {% if tab=='quotas' %}{% set active_menu='agents' %}
   {% elif tab=='history' %}{% set active_menu='chats' if (detail and detail.channel=='WEB') or (not detail and selected=='WEB') else 'calls' %}{% endif %}
 {% else %}
   {% set menu = [
-    ('상담 업무', [('dashboard','대시보드','home'),('calls','내 상담','chat'),('closed','종결 상담','archive')]),
-    ('조회', [('recordings','통화 내역·녹취','phone'),('stats','통계','chart'),('notices','공지사항','notice')])
+    ('상담 업무', [('dashboard','대시보드','home'),('desk','내 상담','chat'),('closed','내 종결 상담','archive')]),
+    ('조회', [('recordings','통화 내역·녹취','phone'),('stats','통계','chart'),('notices','공지사항','notice'),('board','게시판','list')])
   ] %}
-  {% if tab in ('desk','chats') %}{% set active_menu='calls' %}{% endif %}
+  {% set submenus = {
+    'desk': [('calls','통화 상담',none),('chats','채팅 상담',none)],
+    'closed': [('closed','종결 통화','PHONE'),('closed','종결 채팅','WEB')]
+  } %}
+  {% if tab in ('calls','chats') %}{% set active_menu='desk' %}{% endif %}
 {% endif %}
 
 {% macro staff_icon(name) %}<svg class="icon" aria-hidden="true" width="16" height="16"><use href="{{ url_for('static', filename='staff-icons.svg') }}#{{ name }}"></use></svg>{% endmacro %}
 
-{% macro navigation() %}
+{% macro navigation(surface) %}
 <nav aria-label="{{ role_name }} 업무 메뉴">
   {% for group, links in menu %}
-  <p class="rail-group">{{ group }}</p>
+  {% if is_admin %}<details class="admin-nav-group" name="admin-nav-{{ surface }}" {% if active_menu in links|map(attribute=0)|list %}open{% endif %}>
+  <summary class="rail-group">{{ group }}</summary>{% else %}<p class="rail-group">{{ group }}</p>{% endif %}
   {% for key,label,icon in links %}
-  <a class="nav-item" href="{{ url_for(endpoint,tab=key,status='all') if not is_admin and key=='calls' else url_for(endpoint,tab=key) }}" {% if key==active_menu %}aria-current="page"{% endif %}>
+  {% if key in submenus %}
+  <details class="nav-group" {% if key==active_menu %}open{% endif %}>
+    <summary class="nav-item">{{ staff_icon(icon) }}<span>{{ label }}</span></summary>
+    {% for child_tab,child_label,channel in submenus[key] %}
+    <a class="nav-item nav-child" href="{{ url_for(endpoint,tab=child_tab,channel=channel) }}"
+       {% if tab==child_tab and channel==archive_channel|default(none) %}aria-current="page"{% endif %}>{{ child_label }}</a>
+    {% endfor %}
+  </details>
+  {% else %}
+  <a class="nav-item" href="{{ url_for(endpoint,tab=key) }}" {% if key==active_menu %}aria-current="page"{% endif %}>
     {{ staff_icon(icon) }}<span>{{ label }}</span>
   </a>
+  {% endif %}
   {% endfor %}
+  {% if is_admin %}</details>{% endif %}
   {% endfor %}
 </nav>
 {% endmacro %}
@@ -41,16 +59,17 @@
 {% block layout %}
 <div id="desk" class="desk {{ 'admin-desk' if is_admin else 'agent-desk' }}" data-tab="{{ tab }}"
      data-pane="{{ 'chat' if explicit_case else 'list' }}" data-selected="{{ selected_id or '' }}"
+     {% if archive_channel %}data-channel="{{ archive_channel }}"{% endif %}
      {% if detail and detail.content_expired %}data-content-expired{% endif %}>
   <header class="topbar">
     <a class="brand" href="{{ home_url }}" aria-label="말결 TM · {{ role_name }} 대시보드">말결 <span>TM</span></a>
     <div class="topbar-inner">
-      <details class="mobile-menu"><summary aria-label="업무 메뉴">{{ staff_icon('menu') }} 메뉴</summary>{{ navigation() }}</details>
+      <details class="mobile-menu"><summary aria-label="업무 메뉴">{{ staff_icon('menu') }} 메뉴</summary>{{ navigation('mobile') }}</details>
       <span class="product">{{ staff_icon('screen') }}{{ role_name }} 프로그램</span>
       <div class="identity"><span class="online">접속 중</span><span class="profile-name">{{ staff_icon('person') }}{{ user.display_name or user.login_id }}</span><button type="button" data-logout>로그아웃</button></div>
     </div>
   </header>
-  <aside class="rail"><div class="rail-heading">업무 메뉴 {{ staff_icon('menu') }}</div>{{ navigation() }}</aside>
+  <aside class="rail"><div class="rail-heading">업무 메뉴 {{ staff_icon('menu') }}</div>{{ navigation('desktop') }}</aside>
   <main class="dashboard">
     <header class="board-title">
       <h1>{% block heading %}{% endblock %}</h1>

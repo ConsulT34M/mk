@@ -5,7 +5,7 @@
 .inbox { display: flex; flex-direction: column; }
 .inbox-totals { margin-top: auto; padding: 6px 9px; border-top: 1px solid var(--grid); background: #f4f7f8; font-size: 11px; color: var(--muted); }
 .inbox, .case-work { min-width: 0; }
-.inbox-tools, .inbox-filter, .inbox-filter label { display: flex; align-items: center; gap: 5px; }
+.inbox-tools { display: flex; align-items: center; gap: 5px; }
 .inbox-tools { justify-content: space-between; flex-wrap: wrap; padding: 6px 8px; background: #f5f7f8; border-bottom: 1px solid var(--grid); font-size: 12px; }
 .inbox-tools > input { flex: 1 1 100px; width: 100px; }
 .inbox-columns, .case-item { display: grid; grid-template-columns: 76px minmax(0, 1fr) 56px; align-items: stretch; }
@@ -44,6 +44,7 @@
 .case-recordings > :not(summary), .card-body, .phone-fields > .muted { padding: 7px 10px; }
 .case-recordings input[type=file] { width: 100%; }
 .case-recordings .record { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; border-top: 1px solid var(--grid); }
+.case-recordings [data-call-summary] { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
 .inspector-content { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .inspector-content > details { min-width: 0; border: 1px solid var(--grid); }
 .inspector-content > details > summary { background: #f6f8f9; }
@@ -103,3 +104,10 @@
   .phone-fields .two-col > label + label { border-left: 0; }
   .message { grid-template-columns: 95px minmax(0,1fr); }
 }
+.nav-group > summary { list-style: none; }
+.nav-group > summary::-webkit-details-marker { display: none; }
+.nav-group > summary::after { content: ""; width: 6px; height: 6px; margin-left: auto; border: solid currentColor; border-width: 0 1px 1px 0; transform: rotate(-45deg); }
+.nav-group[open] > summary::after { transform: rotate(45deg); }
+.nav-group[open] { background: #2e3c47; }
+.nav-item.nav-child { min-height: 32px; padding-left: 40px; font-size: 12px; }
+.nav-child[aria-current]::after { content: none; }

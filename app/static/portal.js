@@ -50,7 +50,7 @@ document.querySelectorAll("[data-datetime]").forEach(el => {
   if (!el.dataset.datetime) return;
   const date = new Date(el.dataset.datetime);
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-  el.value = local.toISOString().slice(0, 16);
+  el.defaultValue = el.value = local.toISOString().slice(0, 16);
 });
 document.querySelectorAll("form[data-phone-fields]").forEach(form => {
   for (const [name, value] of new FormData(form)) form.elements.namedItem(name).dataset.original = value;
@@ -102,14 +102,14 @@ function showMessages(items) {
 }
 
 async function refreshChat() {
-  if (!chat || chatStopped || (inquiryChat && !inquiryChat.open)) return;
+  if (!chat?.isConnected || chatStopped || (inquiryChat && !inquiryChat.open)) return;
   const read = ++chatRead;
   const hint = $("[data-chat-hint]", chat);
   const state = $("[data-chat-state]", chat);
   const controls = $(".chat-compose", chat).elements;
   try {
     const data = await api("/cases/" + chat.dataset.id + "/messages", { actor: chat.dataset.actor });
-    if (read !== chatRead) return;
+    if (!chat.isConnected || read !== chatRead) return;
     showMessages(data.items);
     if (inquiryChat) {
       state.dataset.status = data.status;
@@ -123,7 +123,7 @@ async function refreshChat() {
     }
     for (const control of controls) control.disabled = data.read_only || (control.type === "submit" && !!control.form.dataset.busy);
   } catch (error) {
-    if (read !== chatRead) return;
+    if (!chat.isConnected || read !== chatRead) return;
     hint.textContent = error.message;
     state.textContent = "연결 확인";
     if ([401, 403, 404].includes(error.status)) {
@@ -142,7 +142,7 @@ async function refreshChat() {
 if (chat) {
   async function poll() {
     await refreshChat();
-    if (!chatStopped) setTimeout(poll, 2000);
+    if (chat.isConnected && !chatStopped) setTimeout(poll, 2000);
   }
   poll();
 }
@@ -204,8 +204,10 @@ document.addEventListener("submit", async event => {
           values.members = data.getAll("members");
           values.previous = JSON.parse(values.previous);
         }
+        if (form.hasAttribute("data-ai-chat-policy")) values.enabled = data.has("enabled");
         if (form.hasAttribute("data-ai-policy")) {
           values.enabled = data.has("enabled");
+          values.ringback_enabled = data.has("ringback_enabled");
           values.offer_handoff = data.has("offer_handoff");
         }
         const saved = await api(form.action, { method: "POST", body: values });
@@ -213,6 +215,12 @@ document.addEventListener("submit", async event => {
         if (form.hasAttribute("data-team-form")) location.assign("/admin?tab=org&team=" + encodeURIComponent(saved.team_id));
         else if (form.dataset.return) location.assign(form.dataset.return);
         else location.reload();
+        break;
+      }
+      case "board": {
+        if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) break;
+        const saved = await api(form.action, {method: "POST", body: values});
+        location.assign(saved.location);
         break;
       }
       case "case-field":
@@ -228,7 +236,8 @@ document.addEventListener("submit", async event => {
       }
       case "phone": {
         const update = Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ""));
-        if (update.call_at) update.call_at = new Date(update.call_at).toISOString();
+        if (update.call_at === form.elements.call_at.defaultValue) delete update.call_at;
+        else if (update.call_at) update.call_at = new Date(update.call_at).toISOString();
         if ("followup_required" in update) update.followup_required = update.followup_required === "yes";
         await api(path + "/phone-response", { method: "POST", body: update });
         location.reload();
@@ -237,7 +246,8 @@ document.addEventListener("submit", async event => {
       case "close":
         if (!window.confirm("상담을 종결하면 기록이 읽기 전용으로 바뀝니다. 종결할까요?")) break;
         await api(path + "/close", { method: "POST", body: values });
-        location.reload();
+        form.dispatchEvent(new CustomEvent("case-closed", {bubbles: true, detail: form.dataset.id}));
+        tell("상담을 종결했습니다.");
         break;
       case "message": {
         const actor = chat.dataset.actor;
@@ -265,7 +275,7 @@ document.addEventListener("submit", async event => {
     else tell(error.message);
   } finally {
     delete form.dataset.busy;
-    if (action !== "message" || (!chatStopped && !$("#chat-message").disabled)) button.disabled = false;
+    if (action !== "message" || (!chatStopped && !form.elements.body.disabled)) button.disabled = false;
   }
 });
 
@@ -318,6 +328,12 @@ if (adminDashboard || aiCalls) {
       if (!next) throw new Error();
       syncStatus.textContent = "";
       if (aiCalls) {
+        const history = page.querySelector("#rkx-voice-calls tbody");
+        const current = document.querySelector("#rkx-voice-calls tbody");
+        if (current && history) {
+          formatTimes(history);
+          if (!current.isEqualNode(history)) current.replaceChildren(...history.childNodes);
+        }
         formatTimes(next);
         updateCallRows(next);
         return;
@@ -347,5 +363,5 @@ document.querySelectorAll("input[type=file]").forEach(input => input.addEventLis
   delete input.form.dataset.requestId;
 }));
 document.addEventListener("error", event => {
-  if (event.target instanceof HTMLAudioElement) tell("녹취를 재생할 수 없습니다. 배정 상태와 보관 기한을 확인해 주세요.");
+  if (event.target instanceof HTMLAudioElement) tell("녹취를 재생할 수 없습니다. 현재 담당자와 녹취 상태를 확인해 주세요.");
 }, true);

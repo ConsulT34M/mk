@@ -31,8 +31,9 @@ class VoiceRecording {
     this.sources.push(source);
   }
 
-  start(url, microphone, remote) {
+  start(url, microphone, remote, startedAt) {
     this.url = url;
+    this.startedAt = startedAt;
     this.attach(microphone);
     this.attach(remote);
     this.node.connect(this.context.destination);
@@ -49,10 +50,12 @@ class VoiceRecording {
     this.offset += data.byteLength;
     this.pending = this.pending.then(async () => {
       if (this.failed) return;
+      const headers = {"Content-Type": "application/octet-stream"};
+      if (offset === 0) headers["X-Call-Started-At"] = this.startedAt;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const result = await fetch(this.url + "/" + offset, {
-            method: "POST", headers: {"Content-Type": "application/octet-stream"},
+            method: "POST", headers,
             body: data, signal: AbortSignal.timeout(10000),
           });
           if (result.ok) return;

@@ -4,11 +4,11 @@
 }
 :focus-visible { outline-color: #7b68d1; }
 .help-header, .help-main { width: min(100% - 48px, 1120px); margin-inline: auto; }
-.help-header { min-height: 82px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); gap: 16px; }
+.help-header { min-height: 82px; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
 .help-brand { display: flex; align-items: center; gap: 13px; }
 .help-brand img { width: 125px; height: auto; }
 .help-brand span { border-left: 1px solid #d8d4e3; padding-left: 14px; font-weight: 650; }
-.help-header a, .help-link { color: var(--accent); font-size: 13px; text-underline-offset: 4px; }
+.help-link { color: var(--accent); font-size: 13px; text-underline-offset: 4px; }
 .help-main { margin-block: clamp(34px, 9vh, 92px); }
 .help-welcome { display: grid; grid-template-columns: 1.15fr 1fr; align-items: center; overflow: hidden; border: 1px solid #e7e2ef; border-radius: 28px; background: #f1eef8; }
 .help-intro { padding: clamp(34px, 5.7vw, 80px); }
@@ -29,6 +29,9 @@
 .voice-body p { margin: 0; line-height: 1.65; overflow-wrap: anywhere; }
 .voice-body button { justify-self: start; }
 #voice-state { padding: 10px 12px; background: #f5f2fa; border-radius: 9px; color: var(--muted); font-size: 14px; }
+#voice-state.connecting::before { content: ""; display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: voice-wait .9s linear infinite; }
+@keyframes voice-wait { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { #voice-state.connecting::before { animation: none; } }
 #voice-ticket { color: var(--accent); font-weight: 650; }
 .voice-consent { display: grid; gap: 6px; }
 .voice-consent label { display: flex; align-items: center; gap: 7px; font-weight: 650; }
@@ -69,7 +72,6 @@
   .help-header { min-height: 65px; }
   .help-brand { gap: 7px; } .help-brand img { width: 95px; }
   .help-brand span { padding-left: 8px; font-size: 13px; }
-  .help-header a { font-size: 12px; }
   .help-welcome { grid-template-columns: 1fr; border-radius: 20px; }
   .help-intro { padding: 32px 26px; }
   .small-break { display: inline; }

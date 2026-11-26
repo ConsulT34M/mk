@@ -272,7 +272,6 @@ $mkSettings = [ordered]@{
     MYSQL_PASSWORD = $mkDbPassword
     PARTNER_TOKEN = ([guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N'))
     RECORDING_DIR = 'C:\MKDesk\recordings'
-    RECORDING_RETENTION_MINUTES = '1440'
     CASE_RETENTION_MINUTES = '1440'
     OPENAI_API_KEY = ''
 }

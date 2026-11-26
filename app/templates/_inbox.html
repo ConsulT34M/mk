@@ -1,12 +1,12 @@
 {% for item in items %}
-<a class="case-item" data-case-id="{{ item.case_id }}" href="{{ url_for('detail_page',case_id=item.case_id,tab=tab,status=list_status) }}"
+<a class="case-item" data-case-id="{{ item.case_id }}" href="{{ url_for('detail_page',case_id=item.case_id,tab=tab,channel=archive_channel) }}"
    {% if item.case_id==selected_id %}aria-current="page"{% endif %} {% if item.content_expired %}data-content-expired{% endif %}>
   <time data-ticket-time datetime="{{ item.opened_at }}">{{ item.opened_at[5:16]|replace('T',' ') }}</time>
   <span class="case-copy"><strong>{{ item.preview or topic_names.get(item.inquiry_type, '웹채팅 상담' if item.channel=='WEB' else '전화 상담') }}</strong><small>#{{ item.case_id[:8]|upper }} · {{ '채팅' if item.channel=='WEB' else '통화' }}</small></span>
   <span class="state-pill {{ 'closed' if item.status=='CLOSED' else 'in_progress' }}">{{ '종결' if item.status=='CLOSED' else '진행 중' }}</span>
 </a>
 {% else %}
-<div class="empty">{{ '종결한 상담이 없습니다.' if tab=='closed' or list_status=='closed' else '표시할 상담이 없습니다.' }}
+<div class="empty">{{ '종결한 상담이 없습니다.' if tab=='closed' else '표시할 상담이 없습니다.' }}
   {% if tab!='closed' %}<a href="{{ url_for('queue_page',tab='dashboard') }}">대기 상담 요청 보기</a>{% endif %}
 </div>
 {% endfor %}

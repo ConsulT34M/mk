@@ -1,12 +1,11 @@
 import hmac
 import os
 import secrets
-from datetime import datetime, timezone
 
 from flask import Blueprint, g, redirect, request, url_for
 
 from .common import (
-    CHAT_COOKIE, INQUIRY_COOKIE, ApiError, admin, agent, assigned_case, case_info, case_row, channel,
+    CHAT_COOKIE, INQUIRY_COOKIE, ApiError, admin, agent, assigned_case, call_datetime, case_info, case_row, channel,
     content_visible, customer_session, deadline, digest, payload, staff_user, status,
     text_field, uuid_field, writable,
 )
@@ -63,7 +62,7 @@ def exchange_cases():
     return {"case_id": case_id}, 201 if created else 200
 
 
-def intake_case(subject, intake, kind, inquiry_type=None):
+def intake_case(subject, intake, kind, inquiry_type=None, *, call_at=None):
     # subject는 고객 참조값, intake는 접수 시도에 붙인 고유 키다. 먼저 삽입을 시도하고
     # 고유 키로 실제 저장된 행을 읽어, 동시에 같은 접수가 들어와도 같은 티켓 ID를 돌려준다.
     if inquiry_type is not None and (not isinstance(inquiry_type, str) or inquiry_type not in TOPICS):
@@ -77,9 +76,9 @@ def intake_case(subject, intake, kind, inquiry_type=None):
     if case["support_subject_ref"] != subject or case["channel"] != kind:
         raise ApiError("REQUEST_KEY_CONFLICT")
     created = case["case_id"] == candidate
-    # 이번 호출이 새 전화 티켓을 만든 경우에만 응대 내용을 채울 빈 행도 한 번 생성한다.
+    # 재접수된 요청이 이미 작성한 응대 기록을 덮어쓰지 않게 한다.
     if created and kind == "PHONE":
-        voice_queries.create_phone_response(candidate)
+        voice_queries.create_phone_response(candidate, call_at)
     return case["case_id"], created
 
 
@@ -137,12 +136,6 @@ def agent_inbox(staff_id):
         expired = not content_visible(item)
         result.append(dict(case_info(item), preview=None if expired else item["preview"], content_expired=expired))
     return result
-
-
-def recent_closed_cases(staff_id):
-    # 담당자의 최근 종결 티켓 여섯 건에 아직 재생 가능한 최신 녹취 한 건의 ID를 붙인다.
-    items = case_queries.recently_closed(staff_id)
-    return [dict(case_info(item), clip_id=item["clip_id"]) for item in items]
 
 
 @cases.post("/staff/cases/<uuid:case_id>/assignee")
@@ -236,7 +229,7 @@ def case_detail(case_id):
     g.audit_target = ("CASE_VIEW", case_id, None)
     case = assigned_case(case_id)
     visible = content_visible(case)
-    recs = recording_queries.for_case(case_id)
+    recs = recording_queries.for_case(case_id, g.actor)
     return {
         "case": case_info(case), "result_note": case["result_note"] if visible else None,
         "customer_ref": case["support_subject_ref"] if visible else None, "content_expired": not visible,
@@ -290,17 +283,7 @@ def save_phone_response(case_id, data, allow_clear=False):
         edits = {key: None for key, value in data.items() if value is None}
         data = {key: value for key, value in data.items() if value is not None}
     if "call_at" in data:
-        # 시간대가 있는 ISO 일시를 UTC로 바꿔 MySQL DATETIME 범위에 맞는 값으로 저장한다.
-        try:
-            call_at = datetime.fromisoformat(str(data["call_at"]).replace("Z", "+00:00"))
-            if call_at.tzinfo is None:
-                raise ValueError
-            utc_call = call_at.astimezone(timezone.utc).replace(tzinfo=None)
-            if utc_call.year < 1000:
-                raise ValueError
-            edits["call_at"] = utc_call
-        except (ValueError, OverflowError):
-            raise ApiError("INVALID_INPUT") from None
+        edits["call_at"] = call_datetime(data["call_at"])
     for key in ("inquiry", "guidance"):
         if key in data:
             edits[key] = text_field(data[key])

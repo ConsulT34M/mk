@@ -50,9 +50,9 @@
   {% for r in recordings %}
   <article class="managed-recording">
     <div class="section-title"><h4>{{ r.label or '녹취 #' ~ r.recording_id[:8]|upper }}</h4>
-      <span class="state-pill {{ 'enabled' if r.state == 'READY' and r.editable else 'closed' }}">{{ {'READY':('저장 완료' if r.editable else '보관 만료'),'PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[r.state] }}</span>
+      <span class="state-pill {{ 'enabled' if r.state == 'READY' else 'closed' }}">{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[r.state] }}</span>
     </div>
-    <p class="record-context"><span>등록 {{ time_at(r.stored_at|utcstamp) }}</span><span>만료 {{ time_at(r.expires_at|utcstamp) }}</span>{% if r.size_bytes is not none %}<span>{{ r.size_bytes|filesizeformat }}</span>{% endif %}</p>
+    <p class="record-context"><span>등록 {{ time_at(r.stored_at|utcstamp) }}</span>{% if r.size_bytes is not none %}<span>{{ r.size_bytes|filesizeformat }}</span>{% endif %}</p>
     {% if r.ai and r.state == 'READY' and r.editable %}<audio controls preload="none" aria-label="AI 상담 녹취" src="{{ url_for('management.play_voice', recording_id=r.recording_id) }}"></audio>{% endif %}
     {% if r.editable %}{{ recording_actions(r, url_for('management.edit_recording', case_id=detail.case_id, recording_id=r.recording_id)) }}{% endif %}
   </article>{% else %}<p class="admin-empty">등록된 녹취가 없습니다.</p>{% endfor %}

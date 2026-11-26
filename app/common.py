@@ -1,6 +1,6 @@
 import hashlib
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from flask import g, request
@@ -16,6 +16,10 @@ CHAT_COOKIE = "tm_chat"
 INQUIRY_COOKIE = "__Host-tm_inquiry"
 # 뷰는 업무 오류 코드만 지정한다. HTTP 상태와 사용자에게 표시할 문구는 여기서 짝을 맞춘다.
 ERRORS = {
+    "AI_CHAT_DISABLED": (409, "AI 채팅 상담 운영이 중지되어 있습니다."),
+    "AI_CHAT_NOT_CONFIGURED": (503, "AI 채팅 서비스를 사용할 수 없습니다. 관리자에게 문의해 주세요."),
+    "AI_CHAT_LIMIT_REACHED": (429, "AI 채팅 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요."),
+    "AI_CHAT_UNAVAILABLE": (502, "AI 답변을 받지 못했어요. 잠시 후 다시 시도해 주세요."),
     "INVALID_INPUT": (400, "입력 항목을 확인해 주세요."),
     "VOICE_NOT_CONFIGURED": (503, "서버에 OpenAI API 키를 설정하면 음성 상담을 시작할 수 있어요."),
     "VOICE_VISITOR_EXPIRED": (401, "문의 페이지를 새로고침한 뒤 음성 상담을 다시 시작해 주세요."),
@@ -46,6 +50,8 @@ ERRORS = {
     "TEAM_CHANGED": (409, "팀 구성이 변경되었습니다. 새로고침한 뒤 다시 선택해 주세요."),
     "VOICE_DISABLED": (503, "현재 AI 음성 상담 운영이 중지되어 있습니다."),
     "MESSAGE_NOT_FOUND": (404, "채팅 메시지를 찾을 수 없습니다."),
+    "BOARD_POST_NOT_FOUND": (404, "게시글을 찾을 수 없습니다."),
+    "BOARD_POST_CHANGED": (409, "게시글이 변경됐습니다. 다시 열어 내용을 확인해 주세요."),
     "STAFF_NOTE_NOT_FOUND": (404, "직원용 상담 기록을 찾을 수 없습니다."),
     "STAFF_NOTE_CHANGED": (409, "다른 관리자가 기록을 수정했습니다. 새로고침 후 내용을 확인해 주세요."),
     "MESSAGE_REMOVED": (410, "삭제된 메시지입니다."),
@@ -53,7 +59,7 @@ ERRORS = {
     "RECORDING_CONSENT_REQUIRED": (409, "녹취에 동의한 전화 상담에만 등록할 수 있습니다."),
     "RECORDING_NOT_READY": (409, "녹취 저장 상태를 확인해 주세요."),
     "ENTRY_CODE_UNUSABLE": (410, "거래소에서 새 입장 코드를 받아 주세요."),
-    "RECORDING_EXPIRED": (410, "녹취 보관 기한이 지났습니다."),
+    "RECORDING_EXPIRED": (410, "삭제된 녹취입니다."),
     "RECORDING_TOO_LARGE": (413, "녹취 파일이 허용 크기를 초과합니다."),
     "WAV_FORMAT_UNSUPPORTED": (415, "유효한 PCM WAV 파일을 선택해 주세요."),
     "RECORDING_STORE_FAILED": (503, "저장소에 접근할 수 없습니다. 같은 요청으로 다시 시도해 주세요."),
@@ -92,6 +98,20 @@ def text_field(value, limit=4000):
     if not isinstance(value, str) or not value.strip() or len(value) > limit:
         raise ApiError("INVALID_INPUT")
     return value.strip()
+
+
+def call_datetime(value):
+    # 브라우저가 보낸 시간대가 포함된 ISO 일시를 MySQL DATETIME용 UTC로 바꾼다.
+    try:
+        instant = datetime.fromisoformat(value)
+        if instant.tzinfo is None:
+            raise ValueError
+        utc = instant.astimezone(timezone.utc).replace(tzinfo=None)
+        if utc.year < 1000:
+            raise ValueError
+        return utc
+    except (TypeError, ValueError, OverflowError):
+        raise ApiError("INVALID_INPUT") from None
 
 
 def digest(value):

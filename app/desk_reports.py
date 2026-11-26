@@ -157,5 +157,5 @@ def call_history(staff_id, dates):
     for row in records:
         case = history.setdefault(row["case_id"], {**row, "clips": []})
         if row["recording_id"]:
-            case["clips"].append((row["recording_id"], row["label"] or "녹취 듣기"))
+            case["clips"].append((row["recording_id"], row["label"] or "녹취 듣기", row["summary"]))
     return list(history.values())

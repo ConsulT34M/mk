@@ -14,6 +14,15 @@ def init_admin():
     for statement in sql.split(";"):
         if statement.strip():
             run(statement)
+    # 기존 목표는 기본값을 도입하는 이번 업그레이드에서만 일괄 변경한다.
+    if one("SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='agent_quota' "
+           "AND column_name='daily' AND column_default IS NULL"):
+        run("UPDATE agent_quota q JOIN staff_account a USING (staff_id) SET q.daily=10,q.weekly=50,q.monthly=200 "
+            "WHERE a.role='AGENT'")
+        run("ALTER TABLE agent_quota ALTER COLUMN daily SET DEFAULT 10, ALTER COLUMN weekly SET DEFAULT 50, "
+            "ALTER COLUMN monthly SET DEFAULT 200")
+    run("INSERT IGNORE INTO agent_quota (staff_id) SELECT a.staff_id FROM staff_account a "
+        "LEFT JOIN agent_quota q USING (staff_id) WHERE a.role='AGENT' AND q.staff_id IS NULL")
     # 배정 해제 이력에서는 새 담당자가, 채팅 접수 전 방문 세션에서는 티켓이 아직 없을 수 있다.
     # 기존 설치의 두 외래 키 열이 이 상태를 NULL로 표현할 수 있게 한다.
     column = one(
@@ -33,6 +42,15 @@ def init_admin():
     if not one("SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() "
                "AND table_name='recording' AND column_name='storage_bucket'"):
         run("ALTER TABLE recording ADD COLUMN storage_bucket VARCHAR(63)")
+    if not one("SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() "
+               "AND table_name='recording' AND column_name='call_started_at'"):
+        run("ALTER TABLE recording ADD COLUMN call_started_at DATETIME(6)")
+    if one("SELECT 1 FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='recording' "
+           "AND column_name='expires_at' AND is_nullable='NO'"):
+        run("ALTER TABLE recording MODIFY expires_at DATETIME(6) NULL")
+    # 수신 중인 AI 통화의 유휴 기한만 유지한다. 이전 버전의 저장 기한은 해제한다.
+    run("UPDATE recording SET expires_at=NULL WHERE expires_at IS NOT NULL AND "
+        "(state IN ('READY','FAILED') OR (state='PENDING' AND uploaded_by IS NOT NULL))")
     migrate_recording_labels()
     migrate_desk()
 
@@ -45,7 +63,7 @@ def migrate_desk():
     # desk_schema.sql의 ADD COLUMN 중 이미 적용한 항목을 건너뛰어 재실행할 수 있게 한다.
     columns = {(row["tbl"], row["col"]) for row in rows(
         "SELECT table_name AS tbl,column_name AS col FROM information_schema.columns "
-        "WHERE table_schema=DATABASE() AND table_name IN ('staff_account','support_case')")}
+        "WHERE table_schema=DATABASE() AND table_name IN ('staff_account','support_case','voice_policy')")}
     for chunk in (SQL_DIR / "desk_schema.sql").read_text(encoding="utf-8").split(";"):
         statement = chunk.strip()
         if not statement:

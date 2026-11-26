@@ -11,7 +11,6 @@
 {% block layout %}
 <header class="help-header">
   <div class="help-brand"><img src="{{ url_for('static', filename='malgyeol-tm.png') }}" alt="말결 TM"><span>고객센터</span></div>
-  <a href="{{ url_for('chat_page', enter=1) }}">입장 코드로 연결</a>
 </header>
 <main class="help-main">
   <section class="help-welcome" aria-labelledby="help-title">
@@ -41,10 +40,11 @@
   <div class="voice-body">
     <p id="voice-description">시작하면 마이크로 말한 내용이 OpenAI에 전달돼요. AI와 대화하다가 “상담원 연결해 주세요”라고 말하면 상담 티켓을 접수할 수 있어요.</p>
     <div class="voice-consent"><label><input id="voice-consent" type="checkbox" aria-describedby="voice-retention"> 통화 녹취와 AI 요약에 동의합니다 (선택)</label>
-      <small id="voice-retention">동의하면 통화 음성을 저장하고 OpenAI로 보내 요약해요. 저장 후 {{ recording_minutes }}분 동안 관리자와 담당 상담원은 녹취를 듣고, 관리자는 요약을 볼 수 있어요.</small></div>
+      <small id="voice-retention">동의하면 통화 음성을 저장하고 OpenAI에 보내 요약해요. 관리자와 담당 상담원이 녹취와 요약을 볼 수 있어요. 관리자가 삭제하거나 동의를 철회할 때까지 보관해요.</small></div>
     <p id="voice-state" role="status">{{ '현재 AI 음성 상담 운영이 중지되어 있습니다.' if not policy_on else '시작 버튼을 누르고 마이크 사용을 허용해 주세요.' if voice_enabled else '서버에 OpenAI API 키를 설정하면 음성 상담을 시작할 수 있어요.' }}</p>
     <p id="voice-recording-state" role="status" hidden></p>
     <p id="voice-ticket" role="status" hidden></p>
+    <audio id="voice-ringback" src="{{ url_for('voice.ringback') }}" preload="none" loop hidden></audio>
     <audio id="voice-audio" autoplay controls hidden aria-label="AI 답변 재생"></audio>
     <button class="help-button" id="voice-start" type="button"{% if not voice_enabled %} disabled{% endif %}>음성 상담 시작</button>
     <button class="voice-open" id="voice-stop" type="button" hidden>음성 상담 종료</button>

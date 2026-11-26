@@ -7,10 +7,12 @@ from werkzeug.security import generate_password_hash
 
 from mysql.migrations import init_admin, migrate_desk, migrate_recording_labels
 
+from .board import board_page
 from .cases import assignment_log, message_info, phone_info, save_phone_response, set_assignee, staff_notes
 from .common import ApiError, admin, case_info, case_row, channel, content_visible, payload, staff_user, text_field, uuid_field
 from .db import admin_change, new_id, stamp, utcnow
 from .desk_reports import channel_metrics, dashboard_charts, midnight, notices, report_range, statistics, today
+from .queries import ai_chat
 from .queries import cases as case_queries
 from .queries import chat as chat_queries
 from .queries import recordings as recording_queries
@@ -18,7 +20,7 @@ from .queries import reports as report_queries
 from .queries import staff as staff_queries
 from .queries import voice as voice_queries
 from .queries.reports import PERIODS
-from .recordings import check_expiry, purge_case_content, stream_recording
+from .recordings import check_not_deleted, purge_case_content, stream_recording
 from .voice_summaries import call_list
 
 # 이 Blueprint의 화면과 변경 API는 모두 /admin 아래에 등록되고 require_admin 검사를 거친다.
@@ -71,6 +73,8 @@ def index():
         data["editor"] = {} if selected == "new" else next((p for p in people if p["staff_id"] == selected), None)
         if selected and selected != "new" and not data["editor"]:
             raise ApiError("AGENT_NOT_FOUND")
+    elif tab == "board":
+        return board_page(g.admin_user)
     elif tab == "notices":
         data.update(notices=notices(), notice_id=new_id())
     elif tab == "org":
@@ -87,6 +91,7 @@ def index():
     elif tab == "ai":
         # 한국 시간 오늘의 음성 동의·거부 이벤트에서 통화 수를, 같은 접수 키의 티켓에서 인계 수를 센다.
         data["policy"] = voice_queries.policy()
+        data["chat_policy"] = ai_chat.policy()
         data["voice_counts"] = report_queries.voice_counts_since(midnight(today()))
     elif tab == "quotas":
         # 목표 편집 링크는 계정 탭의 동일한 편집 폼으로 연결한다.
@@ -99,6 +104,16 @@ def index():
     elif tab in ("ai-calls", "voice-recordings"):
         tab = "ai-calls"
         data["clips"] = call_list()
+        data["rkx_calls"] = voice_queries.rkx_calls()
+    elif tab == "ai-chats":
+        page = max(1, min(request.args.get("page", 1, type=int), 2**31 - 1))
+        sessions = ai_chat.sessions(41, (page - 1) * 40)
+        selected = request.args.get("chat")
+        chat = ai_chat.session(uuid_field(selected)) if selected else None
+        turn_page = max(1, min(request.args.get("turn_page", 1, type=int), 2**31 - 1))
+        turns = ai_chat.turns(chat["chat_id"], 41, (turn_page - 1) * 40) if chat else []
+        data.update(ai_sessions=sessions[:40], page=page, more=len(sessions) > 40, ai_detail=chat,
+                    turns=list(reversed(turns[:40])), turn_page=turn_page, older=len(turns) > 40)
     elif tab == "audit":
         # 한 페이지에 40건을 보여 준다. 41번째 행까지 조회해 다음 페이지 존재 여부를 정한다.
         page = max(1, min(request.args.get("page", 1, type=int), 2**31 - 1))
@@ -311,20 +326,32 @@ def save_team(team_id):
 
 @management.post("/ai-settings")
 def save_ai_policy():
-    # 음성 응대 사용 여부, 상담원 인계 제안 여부, 추가 응대 지침을 단일 운영 설정 행에 저장한다.
     data = payload()
     enabled, offer, instructions = data.get("enabled"), data.get("offer_handoff"), data.get("instructions")
     if not isinstance(enabled, bool) or not isinstance(offer, bool) or not isinstance(instructions, str) or len(instructions) > 600:
         raise ApiError("INVALID_INPUT")
-    voice_queries.update_policy(enabled, offer, instructions.strip())
+    greeting = text_field(data["greeting"], 200) if "greeting" in data else None
+    if "ringback_enabled" in data and not isinstance(data["ringback_enabled"], bool):
+        raise ApiError("INVALID_INPUT")
+    voice_queries.update_policy(enabled, offer, instructions.strip(), greeting, data.get("ringback_enabled"))
     admin_change("AI 응대 설정 변경", "AI 음성 상담")
+    return {"enabled": enabled}
+
+
+@management.post("/ai-chat-settings")
+def save_ai_chat_policy():
+    data = payload()
+    enabled, style = data.get("enabled"), data.get("reply_style")
+    if not isinstance(enabled, bool) or style not in ("brief", "steps"):
+        raise ApiError("INVALID_INPUT")
+    ai_chat.update_policy(enabled, text_field(data.get("greeting"), 200), style)
+    admin_change("AI 응대 설정 변경", "AI 채팅 상담")
     return {"enabled": enabled}
 
 
 @management.get("/cases/<uuid:case_id>")
 def history(case_id):
-    # 관리자 상세 화면을 채널별로 구성한다. 상담 본문·메모와 녹취는 각자의 보관 기한을 쓰므로
-    # 본문을 읽을 수 있는지와 녹취 표시명을 보여 줄 수 있는지를 따로 판정한다.
+    # 상담 본문의 보관 기한이 지나도 관리자는 보관 중인 녹취를 관리할 수 있다.
     case = case_row(case_id)
     g.audit_target = ("CASE_VIEW", case_id, None)
     visible = content_visible(case)
@@ -458,7 +485,7 @@ def delete_ticket(case_id):
 
 @management.get("/voice-recordings/<uuid:recording_id>/audio")
 def play_voice(recording_id):
-    # 직원 업로더가 없는 AI 녹취를 찾는다. 재생 가능 상태와 만료 여부는 공통 스트리밍 함수에서 확인한다.
+    # 직원 업로더가 없는 AI 녹취를 찾는다. 재생 가능 여부는 공통 스트리밍 함수에서 확인한다.
     item = recording_queries.lock_voice_recording(recording_id)
     g.audit_target = ("RECORDING_PLAY", item["case_id"] if item else None, recording_id)
     if not item:
@@ -473,7 +500,7 @@ def request_voice_summary(recording_id):
     item = recording_queries.lock_summary_source(recording_id)
     if not item or item["deleted_at"]:
         raise ApiError("RECORDING_NOT_FOUND")
-    check_expiry(item)
+    check_not_deleted(item)
     if item["state"] != "READY":
         raise ApiError("RECORDING_NOT_READY")
     previous = voice_queries.summary_state(recording_id)
@@ -508,7 +535,7 @@ def edit_recording(case_id, recording_id):
             recording_queries.mark_for_deletion(recording_id)
             admin_change("녹취 삭제 요청", recording_id, case_id)
     else:
-        check_expiry(item)
+        check_not_deleted(item)
         label = data.get("label")
         if not isinstance(label, str) or len(label) > 120:
             raise ApiError("INVALID_INPUT")

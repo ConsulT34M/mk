@@ -17,6 +17,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Run python setup_demo.py first}
       PARTNER_TOKEN: ${PARTNER_TOKEN:?Run python setup_demo.py first}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4.1-mini}
       OPENAI_REALTIME_MODEL: ${OPENAI_REALTIME_MODEL:-}
       OPENAI_CALL_SUMMARY_MODEL: ${OPENAI_CALL_SUMMARY_MODEL:-gpt-audio-1.5}
       DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:?Run python setup_demo.py first}
@@ -31,7 +32,6 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      RECORDING_RETENTION_MINUTES: ${RECORDING_RETENTION_MINUTES:-5}
       CASE_RETENTION_MINUTES: ${CASE_RETENTION_MINUTES:-5}
     volumes:
       - recordings:/var/lib/tm-recordings

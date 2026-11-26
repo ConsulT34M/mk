@@ -8,7 +8,7 @@ from pathlib import Path
 from flask import current_app
 
 from . import recording_store
-from .common import ApiError, deadline
+from .common import ApiError
 from .db import db, utcnow
 from .queries import recordings as recording_queries
 
@@ -39,11 +39,11 @@ def partial_path(voice_id):
 
 
 def remove_partial(voice_id):
-    # 빈 통화 종료, 정상 저장, 만료 정리에서 공통으로 호출하므로 이미 지운 파일도 허용한다.
+    # 빈 통화 종료, 정상 저장, 삭제 요청에서 공통으로 호출한다.
     partial_path(voice_id).unlink(missing_ok=True)
 
 
-def append_voice(item, offset, data):
+def append_voice(item, offset, data, started_at=None):
     # 호출자가 녹취 행을 잠근 상태에서 처리한다. 샘플 하나가 2바이트이므로
     # 시작 위치와 본문 길이가 모두 짝수여야 하며 빈 본문은 받지 않는다.
     if item["state"] != "PENDING":
@@ -75,7 +75,7 @@ def append_voice(item, offset, data):
         audio.flush()
         os.fsync(audio.fileno())
     # 파일 쓰기를 디스크에 반영한 후에만 DB의 수신 길이를 늘린다. 이후 요청은 이 길이를 기준으로 삼는다.
-    recording_queries.record_progress(item["recording_id"], end, idle_deadline())
+    recording_queries.record_progress(item["recording_id"], end, idle_deadline(), started_at)
 
 
 def finalize_voice(item):
@@ -104,13 +104,11 @@ def finalize_voice(item):
         checksum = hashlib.file_digest(audio, "sha256").digest()
         audio.seek(0)
         recording_store.put_audio(item, audio)
-    recording_queries.finish_voice_recording(
-        rid, HEADER_BYTES + length, checksum, deadline("RECORDING_RETENTION_MINUTES", 5),
-    )
+    recording_queries.finish_voice_recording(rid, HEADER_BYTES + length, checksum)
     # 완성 파일과 READY 상태를 확정한 후 임시본을 지운다. DB 확정 전에는 원본을 이용해 재시도할 수 있다.
     db().commit()
     try:
         remove_partial(rid)
     except OSError:
-        pass  # 남은 임시본은 보관 기한이 끝날 때 정리 작업이 다시 삭제한다.
+        pass  # 녹취 삭제 요청 시 임시본도 함께 정리한다.
     return True

@@ -69,6 +69,9 @@ def check_admin_accounts(base, context, admin, agent, partner):
     path = "/admin/agents/" + key
     admin.call("/admin/agents", credentials, 409)
     assert worker.call("/staff/sessions", credentials)["destination"] == "/portal"
+    dashboard_page = worker.call("/portal?tab=dashboard")
+    assert dashboard_page.index(b'id="live-notices"') < dashboard_page.index(b'id="live-list"')
+    assert all(f"0 / {goal}건".encode() in dashboard_page for goal in (10, 50, 200))
     credentials = {"login_id": login + "-renamed", "password": uid()}
     admin.call(path, credentials)
     worker.call("/staff/cases", expect=401)
@@ -178,9 +181,11 @@ def check_inquiry_popup(base, context, admin, agent):
         return {row["case_id"] for row in admin.call("/staff/cases")["items"]}
 
     before = listed_tickets()
+    visitor.call("/chat?enter=1", expect=404)
     for client in (visitor, outsider):
         client.headers["X-Chat-Actor"] = "inquiry"
-        assert "문의하기".encode() in client.call("/inquiry")
+        page = client.call("/inquiry")
+        assert "문의하기".encode() in page and b"/chat?enter=1" not in page
     assert listed_tickets() == before
     form_type = "application/x-www-form-urlencoded"
     with ThreadPoolExecutor(2) as pool:
@@ -284,7 +289,9 @@ def main():
         assert sum(pool.map(try_entry, range(2))) == 1
     code = partner.call(room + "/entry-codes", subject, 201)["entry_code"]
     customer.call("/chat/sessions", {"entry_code": code})
-    assert "고객 상담방".encode() in customer.call("/chat")
+    chat_page = customer.call("/chat")
+    assert "고객 상담방".encode() in chat_page and b"/chat?enter=1" not in chat_page
+    customer.call("/chat?enter=1", expect=404)
     admin.call(handoff, {"new_agent_id": staff["test"]})
     assert "웹채팅 상담".encode() in agent.call("/portal/" + web)
     msg = {"client_message_id": uid(), "body": "검수용 문의"}
@@ -394,12 +401,14 @@ def main():
         limit = time.monotonic() + args.wait_purge
         while time.monotonic() < limit:
             detail = next_agent.call(path)
-            if all(r["state"] == "DESTROYED" for r in detail["recordings"]) and detail["phone_response"] is None:
+            states = {r["recording_id"]: r["state"] for r in detail["recordings"]}
+            if states.get(second) == "DESTROYED" and detail["phone_response"] is None:
+                assert states[rec] == "READY"
                 break
             time.sleep(2)
         else:
             raise AssertionError("Automatic retention cleanup did not finish within the requested interval")
-        next_agent.call(audio, expect=410)
+        assert next_agent.call(audio) == wav
         assert next_agent.call(path)["result_note"] is None and not customer.call(room + "/messages")["items"]
         admin.call(history + "/history", {"guidance": "만료 후 수정"}, 410)
         admin.call("/admin/notes", handoff_note, 410)
@@ -407,7 +416,7 @@ def main():
         admin.call(history + "/history", {"operation": "delete_ticket"}, 204)
         next_agent.call(path, expect=404)
         assert phone not in next_agent.call("/portal/updates?tab=closed")["html"]
-        print("PASS automatic recording and case-content purge")
+        print("PASS case-content expiry preserves recordings until explicit deletion")
 
 
 if __name__ == "__main__":

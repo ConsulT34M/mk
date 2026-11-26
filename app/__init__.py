@@ -9,12 +9,14 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, make_response, redirect, render_template, request, url_for
+from flask import Flask, abort, g, jsonify, make_response, redirect, render_template, request, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .admin import PERIODS, init_admin, management, migrate_desk, quota_rows
-from .cases import agent_inbox, case_detail, cases as cases_blueprint, intake_case, recent_closed_cases, staff_notes, waiting_tickets
+from .ai_chat import ai_chat
+from .board import board, board_page
+from .cases import agent_inbox, case_detail, cases as cases_blueprint, intake_case, staff_notes, waiting_tickets
 from .common import (
     CHAT_COOKIE, INQUIRY_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
     payload, staff_user, text_field,
@@ -23,11 +25,12 @@ from .db import audit, check_connection, close_db, db as get_db, new_id, stamp, 
 from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, case_status_breakdown, duration, notices, report_range, statistics
 from .queries import cases as case_queries
 from .queries import chat as chat_queries
+from .queries import recordings as recording_queries
 from .queries import staff as staff_queries
 from .queries import voice as voice_queries
 from .recordings import purge, recordings as recordings_blueprint
 from .voice import voice
-from .voice_summaries import summary_worker
+from .voice_summaries import request_line, summary_worker
 
 # 이 모듈에서 Flask 앱을 만들고 상담 티켓, 녹취, 관리자, 음성 상담 라우트를 연결한다.
 # 각 Blueprint의 뷰도 아래에 등록한 앱 공통 훅을 거쳐 응답한다.
@@ -44,12 +47,15 @@ app.config["S3_RECORDING_BUCKET"] = os.getenv("S3_RECORDING_BUCKET", "").strip()
 app.teardown_appcontext(close_db)
 # Blueprint 안의 @...get, @...post 등으로 선언한 경로가 여기서 앱의 URL 목록에 등록된다.
 # 예를 들어 url_for("management.index")는 management에 등록한 index 뷰의 주소를 만든다.
+app.register_blueprint(board)
 app.register_blueprint(cases_blueprint)
 app.register_blueprint(recordings_blueprint)
 app.register_blueprint(management)
+app.register_blueprint(ai_chat)
 app.register_blueprint(voice)
 # Jinja 템플릿의 utcstamp 필터는 DB의 일시를 UTC 문자열로 표시한다.
 app.add_template_filter(stamp, "utcstamp")
+app.add_template_filter(request_line, "request_line")
 # 두 함수를 Flask CLI 명령으로 등록해, 앱을 실행하는 환경에서 DB 스키마를 준비할 수 있게 한다.
 app.cli.command("init-admin")(init_admin)
 app.cli.command("migrate-desk")(migrate_desk)
@@ -87,10 +93,8 @@ def check_origin():
 @app.errorhandler(ApiError)
 def api_failure(error):
     # finish에서 감사 기록에 남길 업무 오류 코드를 저장한다. 브라우저 폼으로 들어온
-    # 로그인·입장·티켓 수락 오류는 해당 화면에 표시하고, API 호출에는 코드와 메시지를 JSON으로 보낸다.
+    # 로그인·티켓 수락 오류는 해당 화면에 표시하고, 나머지는 코드와 메시지를 JSON으로 보낸다.
     g.error_code = error.code
-    if request.endpoint == "enter_form":
-        return render_template("entry.html", error=error.message), error.status
     if request.endpoint == "login" and request.mimetype == "application/x-www-form-urlencoded":
         return render_template("login.html", error=error.message), error.status
     if request.endpoint == "cases.claim" and request.mimetype == "application/x-www-form-urlencoded":
@@ -122,6 +126,8 @@ def finish(response):
     response.headers["Cache-Control"] = "no-store"
     # 로그인·티켓 폼이 같은 출처로 제출될 때 브라우저가 Origin을 전달할 수 있게 한다.
     form_page = request.endpoint in {"home", "login", "queue_page", "detail_page", "inquiry_page"} and response.mimetype == "text/html"
+    if request.endpoint == "management.index" and request.args.get("tab") == "board":
+        form_page = True
     response.headers["Referrer-Policy"] = "same-origin" if form_page else "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -268,30 +274,23 @@ def detail_page(case_id):
     return agent_desk(user, detail)
 
 
-def desk_lists(user, tab):
+def desk_lists(user, tab, channel=None):
     # 전체 페이지와 부분 갱신 API가 같은 목록·건수를 사용하도록 현재 담당 티켓을 한 번 나눈다.
     owned = agent_inbox(user["staff_id"])
     active = [item for item in owned if item["status"] == "IN_PROGRESS"]
     closed = [item for item in owned if item["status"] == "CLOSED"]
-    list_status = request.args.get("status", "active")
-    if list_status not in ("active", "closed", "all"):
-        list_status = "active"
-    items = closed if tab == "closed" else active
-    channel_closed = len(closed)
+    closed_count = len(closed)
     if tab not in {"dashboard", "desk", "calls", "chats", "closed"}:
         tab = "dashboard"
-    if tab in ("calls","chats"):
-        # 채널 탭에서는 선택한 상태로 목록을 거른다. 전체 종결 건수와 채널별 종결 건수는 따로 센다.
-        channel = "PHONE" if tab == "calls" else "WEB"
-        channel_closed = sum(item["channel"] == channel for item in closed)
+    archive_channel = channel if tab == "closed" and channel in ("PHONE", "WEB") else None
+    channel = {"calls": "PHONE", "chats": "WEB"}.get(tab, archive_channel)
+    if channel:
+        closed = [item for item in closed if item["channel"] == channel]
         active = [item for item in active if item["channel"] == channel]
-        items = active if list_status == "active" else [
-            item for item in (closed if list_status == "closed" else owned) if item["channel"] == channel
-        ]
     return {
-        "tab": tab, "items": items, "list_status": list_status, "tickets": waiting_tickets(),
-        "recent_cases": recent_closed_cases(user["staff_id"]) if tab in ("desk", "calls", "chats") else [],
-        "active_count": len(active), "closed_count": len(closed), "channel_closed_count": channel_closed,
+        "tab": tab, "items": closed if tab == "closed" else active, "tickets": waiting_tickets(),
+        "archive_channel": archive_channel, "recent_cases": closed[:6] if tab == "closed" else [],
+        "active_count": len(active), "closed_count": closed_count, "channel_closed_count": len(closed),
     }
 
 
@@ -299,15 +298,14 @@ def agent_desk(user, detail=None):
     # 상세 링크로 들어온 경우와 데스크가 목록의 첫 티켓을 자동 선택한 경우를 템플릿에서 구분한다.
     explicit_case = detail is not None
     tab = request.args.get("tab")
+    channel = request.args.get("channel")
     if detail:
         case = detail["case"]
-        channel_tab = "calls" if case["channel"] == "PHONE" else "chats"
-        # 채널 목록에서 '전체'나 '종결'을 보다가 연 티켓이면 기존 탭을 유지한다.
-        # 그 밖의 경로로 종결 티켓을 열면 종결 탭을 선택한다.
-        if case["status"] == "CLOSED" and not (tab == channel_tab and request.args.get("status") in ("all", "closed")):
-            tab = "closed"
-        else:
-            tab = channel_tab
+        channel = case["channel"]
+        channel_tab = "calls" if channel == "PHONE" else "chats"
+        tab = "closed" if case["status"] == "CLOSED" else channel_tab
+    if tab == "board":
+        return board_page(user)
     if tab in ("notices", "stats", "recordings"):
         # 이 세 탭은 티켓 목록과 별도로 렌더링한다. 통화 이력은 본인 기준이고,
         # 통계의 팀 범위는 상담원이 실제 팀에 속하며 해당 범위를 선택한 경우에 적용한다.
@@ -325,7 +323,7 @@ def agent_desk(user, detail=None):
                 data.update(team=team, scope="team" if own_team else "mine",
                             report=statistics(dates, staff_id=user["staff_id"], own_team=own_team))
         return render_template("agent.html", user=user, tab=tab, **data)
-    data = desk_lists(user, tab)
+    data = desk_lists(user, tab, channel)
     if not detail and data["tab"] != "dashboard" and data["items"]:
         # 목록을 읽은 뒤 첫 티켓이 재배정되거나 삭제될 수 있다. 이때는 목록을 다시 읽게 한다.
         try:
@@ -333,16 +331,18 @@ def agent_desk(user, detail=None):
         except ApiError as error:
             if error.code not in ("CASE_ACCESS_DENIED", "CASE_NOT_FOUND"):
                 raise
-            return redirect(url_for("queue_page", tab=data["tab"]))
+            return redirect(url_for("queue_page", tab=data["tab"], channel=data["archive_channel"]))
+        if (detail["case"]["status"] == "CLOSED") != (data["tab"] == "closed"):
+            return redirect(url_for("queue_page", tab=data["tab"], channel=data["archive_channel"]))
     if not detail:
         g.audit_target = ("CASE_LIST", None, None)
     case = detail["case"] if detail else None
-    data["notices"] = notices(latest=True)
     if data["tab"] == "dashboard":
+        data["notices"] = notices(latest=True)
         data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS, case_summary=case_status_breakdown())
     return render_template(
         "agent.html", user=user, detail=detail, case=case, selected_id=case["case_id"] if case else None,
-        explicit_case=explicit_case, recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5)), **data,
+        explicit_case=explicit_case, **data,
     )
 
 
@@ -351,32 +351,38 @@ def desk_updates():
     # 데스크의 주기적 갱신 요청에 건수와 서버에서 렌더링한 HTML 조각을 JSON으로 응답한다.
     # 선택된 티켓 ID는 목록 강조와 담당자 범위의 메모 조회에 사용한다.
     user = agent()
-    data = desk_lists(user, request.args.get("tab"))
+    data = desk_lists(user, request.args.get("tab"), request.args.get("channel"))
     g.audit_target = ("CASE_LIST", None, None)
     template = "_tickets.html" if data["tab"] == "dashboard" else "_inbox.html"
     selected_id = request.args.get("case_id")
     result = {
         "waiting": len(data["tickets"]), "active": data["active_count"], "closed": data["closed_count"],
         "listed": len(data["items"]), "channel_closed": data["channel_closed_count"],
-        "notice_html": render_template("_notices.html", notices=notices(latest=True)),
-        "html": render_template(template, selected_id=selected_id, **data),
+        "html": render_template(template, selected_id=selected_id, **data), "history_html": "",
     }
     if data["tab"] == "dashboard":
+        result["notice_html"] = render_template("_notices.html", notices=notices(latest=True))
         result["quota_html"] = render_template("_quota_rows.html", quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
         result["chart_html"] = render_template("_case_chart.html", case_summary=case_status_breakdown())
-    elif data["tab"] != "closed":
+    elif data["tab"] == "closed":
         result["history_html"] = render_template("_agent_history.html", recent_cases=data["recent_cases"])
     if data["tab"] != "dashboard" and selected_id:
         result["notes_html"] = render_template("_agent_notes.html", notes=staff_notes(selected_id, agent_id=user["staff_id"]))
+        if request.args.get("summaries") == "1":
+            result["summaries"] = {
+                row["recording_id"]: request_line(row["summary"])
+                for row in recording_queries.for_case(selected_id, user["staff_id"]) if row["summary"]
+            }
     return result
 
 
 @app.get("/chat")
 def chat_page():
-    # 교환한 코드로 발급받은 채팅 쿠키에서 티켓을 찾는다. enter=1이면 코드 입력 화면을 다시 연다.
+    if request.args.get("enter") == "1":
+        abort(404)
     session = customer_session()
-    if not session or not session["case_id"] or request.args.get("enter") == "1":
-        return render_template("entry.html")
+    if not session or not session["case_id"]:
+        return redirect(url_for("inquiry_page"))
     case = case_row(session["case_id"])
     return render_template("customer.html", case=case, actor="customer")
 
@@ -391,8 +397,7 @@ def inquiry_page():
     policy_on = bool(voice_queries.policy()["enabled"])
     # 운영자가 정한 음성 상담 상태와 실제 시작 가능 여부(서버 키 설정 포함)를 화면에 각각 전달한다.
     response = make_response(render_template("inquiry.html", case=case, opened=request.args.get("chat") == "open", policy_on=policy_on,
-                                             voice_enabled=policy_on and bool(os.environ.get("OPENAI_API_KEY", "").strip()),
-                                             recording_minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5))))
+                                             voice_enabled=policy_on and bool(os.environ.get("OPENAI_API_KEY", "").strip())))
     if not visitor:
         # 첫 방문에서는 티켓 없이 방문 세션만 발급한다. 채팅 접수는 open_inquiry에서 처리한다.
         token = secrets.token_urlsafe(32)
