@@ -8,7 +8,12 @@ from datetime import timedelta
 from flask import Blueprint, current_app, g, request
 
 from .common import ApiError, assigned_case, channel, deadline, uuid_field, writable
-from .db import audit, db, new_id, one, rows, run, stamp, utcnow
+from .db import audit, db, new_id, stamp, utcnow
+from .queries import cases as case_queries
+from .queries import chat as chat_queries
+from .queries import recordings as recording_queries
+from .queries import staff as staff_queries
+from .queries import voice as voice_queries
 from . import recording_store
 from .voice_recording import finalize_voice, remove_partial
 
@@ -54,7 +59,7 @@ def can_upload(case):
     # 담당자 확인을 끝낸 티켓에서 호출한다. 종결되지 않은 전화 상담이고 녹취 동의를 받았어야 한다.
     channel(case, "PHONE")
     writable(case)
-    consent = one("SELECT consent_state FROM phone_response WHERE case_id=%s", (case["case_id"],))
+    consent = voice_queries.recording_consent(case["case_id"])
     if not consent or consent["consent_state"] != "AGREED":
         raise ApiError("RECORDING_CONSENT_REQUIRED")
 
@@ -74,7 +79,7 @@ def upload_recording(case_id):
     data = read_wav()
     checksum = hashlib.sha256(data).digest()
     can_upload(assigned_case(case_id, lock=True))
-    item = one("SELECT * FROM recording WHERE case_id=%s AND upload_request_id=%s FOR UPDATE", (case_id, request_id))
+    item = recording_queries.lock_upload(case_id, request_id)
     created = item is None
     if item:
         # 같은 티켓의 업로드 요청 ID는 같은 직원과 같은 파일에만 재사용할 수 있다.
@@ -87,32 +92,27 @@ def upload_recording(case_id):
         recording_id = item["recording_id"]
     else:
         recording_id = new_id()
-        run(
-            "INSERT INTO recording (recording_id, case_id, upload_request_id, uploaded_by, state, object_key, "
-            "size_bytes, sha256, expires_at) VALUES (%s,%s,%s,%s,'PENDING',%s,%s,%s,%s)",
-            (recording_id, case_id, request_id, g.actor, recording_store.object_key(recording_id), len(data), checksum,
-             deadline("RECORDING_RETENTION_MINUTES", 5)),
+        recording_queries.reserve_upload(
+            recording_id, case_id, request_id, g.actor, recording_store.object_key(recording_id),
+            current_app.config["S3_RECORDING_BUCKET"], len(data), checksum, deadline("RECORDING_RETENTION_MINUTES", 5),
         )
     # 파일 쓰기 전에 예약을 별도로 커밋한다. 중간에 프로세스가 끝나도 재시도나 정리 작업이
     # PENDING 행을 찾을 수 있다. 커밋으로 잠금이 풀렸으므로 담당·동의·기한을 다시 확인한다.
     db().commit()
     can_upload(assigned_case(case_id, lock=True))
-    item = one("SELECT * FROM recording WHERE recording_id=%s FOR UPDATE", (recording_id,))
+    item = recording_queries.lock_recording(recording_id)
     check_expiry(item)
     if item["state"] != "READY":
         try:
-            recording_store.put_audio(item["object_key"], io.BytesIO(data))
+            recording_store.put_audio(item, io.BytesIO(data))
         except OSError:
             # 실패를 먼저 커밋해 요청 종료 시의 롤백 뒤에도 같은 ID로 저장을 다시 시도할 수 있게 한다.
-            run("UPDATE recording SET state='FAILED' WHERE recording_id=%s", (recording_id,))
+            recording_queries.mark_failed(recording_id)
             db().commit()
             raise ApiError("RECORDING_STORE_FAILED") from None
         # 실제 파일 쓰기가 끝난 시점부터 재생 가능한 보관 기간을 계산한다.
         expires = deadline("RECORDING_RETENTION_MINUTES", 5)
-        run(
-            "UPDATE recording SET state='READY', stored_at=UTC_TIMESTAMP(6), expires_at=%s WHERE recording_id=%s",
-            (expires, recording_id),
-        )
+        recording_queries.mark_ready(recording_id, expires)
         item.update(state="READY", expires_at=expires)
     return recording_info(item), 201 if created else 200
 
@@ -122,7 +122,7 @@ def play(case_id, recording_id):
     # URL의 티켓에 실제로 연결된 녹취만 찾고 현재 담당자인지 확인한다. 재생 시도는 감사 대상이다.
     g.audit_target = ("RECORDING_PLAY", case_id, recording_id)
     assigned_case(case_id, lock=True)
-    item = one("SELECT * FROM recording WHERE recording_id=%s AND case_id=%s FOR UPDATE", (recording_id, case_id))
+    item = recording_queries.lock_case_recording(case_id, recording_id)
     if not item:
         raise ApiError("RECORDING_NOT_FOUND")
     return stream_recording(item)
@@ -130,37 +130,36 @@ def play(case_id, recording_id):
 
 def stream_recording(item):
     # 권한을 확인한 호출자가 넘긴 녹취의 기한과 준비 상태를 검사한 뒤 Flask 파일 응답을 만든다.
-    # 저장소에서 파일을 열 수 없으면 실패 상태를 확정하고 API 오류로 알린다.
+    # 원본이 없을 때만 실패로 확정한다. 저장소 일시 장애는 다음 재생 요청에서 재시도한다.
     check_expiry(item)
     if item["state"] != "READY":
         raise ApiError("RECORDING_NOT_READY")
     try:
-        return recording_store.send_audio(item["object_key"])
-    except OSError:
-        run("UPDATE recording SET state='FAILED' WHERE recording_id=%s", (item["recording_id"],))
+        return recording_store.send_audio(item)
+    except FileNotFoundError:
+        recording_queries.mark_failed(item["recording_id"])
         db().commit()
+        raise ApiError("RECORDING_STORE_FAILED") from None
+    except OSError:
         raise ApiError("RECORDING_STORE_FAILED") from None
 
 
 def purge_case_content(case_id):
     # 채팅·전화 응대·직원 메모·종결 메모를 제거하고 처리 시각을 남긴다.
     # 티켓의 상태와 배정 이력은 유지하며, 녹취 파일은 별도의 정리 절차를 따른다.
-    run("DELETE FROM chat_message WHERE case_id=%s", (case_id,))
-    run("DELETE FROM phone_response WHERE case_id=%s", (case_id,))
-    run("DELETE FROM staff_note WHERE case_id=%s", (case_id,))
-    run("UPDATE support_case SET result_note=NULL, content_purged_at=UTC_TIMESTAMP(6) WHERE case_id=%s", (case_id,))
+    chat_queries.delete_messages(case_id)
+    voice_queries.delete_phone_response(case_id)
+    case_queries.delete_notes(case_id)
+    case_queries.mark_content_purged(case_id)
 
 
 def purge():
     # Flask CLI와 주기적 유지보수 작업이 공유한다. 먼저 정리 후보 ID만 읽고 각 행을 잠근 뒤
     # 현재 상태·기한을 다시 판단한다. 한 건씩 커밋해 처리한 녹취의 잠금을 바로 놓는다.
-    due = rows(
-        "SELECT recording_id FROM recording WHERE state='DELETE_PENDING' "
-        "OR (state<>'DESTROYED' AND expires_at<=UTC_TIMESTAMP(6))"
-    )
+    due = recording_queries.due_for_purge()
     for row in due:
         rid = row["recording_id"]
-        item = one("SELECT * FROM recording WHERE recording_id=%s FOR UPDATE", (rid,))
+        item = recording_queries.lock_recording(rid)
         if item["uploaded_by"] is None and item["state"] == "PENDING" and item["expires_at"] <= utcnow() and item["size_bytes"]:
             # 브라우저가 종료 요청을 보내지 못한 경우다. DB가 수신 확인한 음성이 있으면 WAV로 완성한다.
             # 저장 오류는 재시도하되 유휴 만료 후 보관 기간까지 지나면 삭제 대기로 넘긴다.
@@ -169,7 +168,7 @@ def purge():
             except OSError:
                 audit("RECORDING_STORE", "retention", item["case_id"], rid, "RETRY")
                 if utcnow() - item["expires_at"] >= timedelta(minutes=int(os.getenv("RECORDING_RETENTION_MINUTES", 5))):
-                    run("UPDATE recording SET state='DELETE_PENDING' WHERE recording_id=%s", (rid,))
+                    recording_queries.mark_for_deletion(rid)
             db().commit()
             continue
         if item["state"] != "DESTROYED" and (item["state"] == "DELETE_PENDING" or item["expires_at"] <= utcnow()):
@@ -178,30 +177,26 @@ def purge():
             try:
                 if item["uploaded_by"] is None:
                     remove_partial(rid)
-                recording_store.delete_audio(item["object_key"])
+                recording_store.delete_audio(item)
             except OSError:
-                run("UPDATE recording SET state='DELETE_PENDING' WHERE recording_id=%s", (rid,))
+                recording_queries.mark_for_deletion(rid)
                 audit("RECORDING_PURGE", "retention", item["case_id"], rid, "RETRY")
             else:
-                run(
-                    "UPDATE recording SET state='DESTROYED', object_key=NULL, size_bytes=NULL, sha256=NULL, label=NULL, "
-                    "destroyed_at=UTC_TIMESTAMP(6) WHERE recording_id=%s", (rid,),
-                )
+                recording_queries.mark_destroyed(rid)
                 audit("RECORDING_PURGE", "retention", item["case_id"], rid)
         db().commit()
 
     # 상담 본문의 기한은 녹취와 독립적이다. 아직 본문을 정리하지 않은 티켓만 처리한다.
-    due = rows("SELECT case_id FROM support_case WHERE content_expires_at<=UTC_TIMESTAMP(6) AND content_purged_at IS NULL")
+    due = case_queries.due_for_purge()
     for row in due:
         key = row["case_id"]
-        case = one("SELECT content_purged_at,content_expires_at FROM support_case WHERE case_id=%s FOR UPDATE", (key,))
+        case = case_queries.lock_retention(key)
         if not case["content_purged_at"] and case["content_expires_at"] <= utcnow():
             purge_case_content(key)
             audit("CASE_CONTENT_PURGE", "retention", key)
         db().commit()
     # 마지막으로 만료된 입장 코드·세션과, 원본 녹취가 실패·삭제·만료 상태에 해당하는 요약을 정리한다.
-    for table in ("entry_code", "customer_session", "staff_session"):
-        run(f"DELETE FROM {table} WHERE expires_at<=UTC_TIMESTAMP(6)")
-    run("DELETE s FROM ai_call_summary s JOIN recording r ON r.recording_id=s.recording_id "
-        "WHERE r.state IN ('DELETE_PENDING','DESTROYED','FAILED') OR (r.state='READY' AND r.expires_at<=UTC_TIMESTAMP(6))")
+    chat_queries.delete_expired_sessions()
+    staff_queries.delete_expired_sessions()
+    voice_queries.delete_expired_summaries()
     db().commit()

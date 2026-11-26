@@ -19,6 +19,7 @@ def main():
         with os.fdopen(os.open(env, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as out:
             out.write("DEMO_ADMIN_PASSWORD=admin\n")
             out.write("OPENAI_API_KEY=\n")
+            out.write("S3_RECORDING_BUCKET=\nAWS_REGION=ap-northeast-2\n")
             for key in keys:
                 out.write(f"{key}={secrets.token_urlsafe(32)}\n")
         print("Created .env with local credentials.")

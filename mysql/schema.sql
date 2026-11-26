@@ -94,6 +94,7 @@ CREATE TABLE recording (
     label VARCHAR(120),
     state ENUM('PENDING','READY','FAILED','DELETE_PENDING','DESTROYED') NOT NULL,
     object_key VARCHAR(80) UNIQUE,
+    storage_bucket VARCHAR(63),
     size_bytes INT UNSIGNED,
     sha256 BINARY(32),
     expires_at DATETIME(6) NOT NULL,

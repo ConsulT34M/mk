@@ -5,7 +5,10 @@ from uuid import UUID
 
 from flask import g, request
 
-from .db import one, stamp, utcnow
+from .db import stamp, utcnow
+from .queries import cases as case_queries
+from .queries import chat as chat_queries
+from .queries import staff as staff_queries
 
 # 직원 포털, 거래소를 통한 채팅 입장, 공개 문의 페이지는 서로 다른 쿠키로 세션을 찾는다.
 STAFF_COOKIE = "tm_staff"
@@ -106,12 +109,7 @@ def staff_user(required=True):
     token = request.cookies.get(STAFF_COOKIE)
     user = None
     if token:
-        user = one(
-            "SELECT a.staff_id, a.login_id, a.role, a.display_name, a.team_id FROM staff_session s "
-            "JOIN staff_account a ON a.staff_id=s.staff_id "
-            "WHERE s.token_hash=%s AND s.expires_at>UTC_TIMESTAMP(6) AND a.is_active=1",
-            (digest(token),),
-        )
+        user = staff_queries.session_user(digest(token))
     if user:
         # g는 현재 앱 컨텍스트에 속한다. 이 요청의 감사 로그와 변경 이력이 같은 직원 ID를 사용한다.
         g.actor = user["staff_id"]
@@ -126,10 +124,7 @@ def customer_session(cookie_name=CHAT_COOKIE, *, lock=False):
     # 세션 행이 있어도 case_id는 비어 있다. lock=True인 접수 경로는 이 행을 잠가 중복 생성을 막는다.
     token = request.cookies.get(cookie_name)
     if token:
-        row = one(
-            "SELECT case_id, expires_at FROM customer_session "
-            "WHERE token_hash=%s AND expires_at>UTC_TIMESTAMP(6)" + (" FOR UPDATE" if lock else ""), (digest(token),),
-        )
+        row = chat_queries.session(digest(token), lock=lock)
         if row and row["case_id"]:
             g.actor = "customer:" + row["case_id"]
         return row
@@ -155,8 +150,7 @@ def agent():
 def case_row(case_id, lock=False):
     # visible_case는 삭제 표시된 티켓을 제외한다. 이어서 상태를 바꾸는 호출자는
     # FOR UPDATE로 조회해 같은 티켓을 수정하는 다른 트랜잭션과 순서를 맞춘다.
-    sql = "SELECT * FROM visible_case WHERE case_id=%s"
-    case = one(sql + (" FOR UPDATE" if lock else ""), (case_id,))
+    case = case_queries.by_id(case_id, lock=lock)
     if not case:
         raise ApiError("CASE_NOT_FOUND")
     return case

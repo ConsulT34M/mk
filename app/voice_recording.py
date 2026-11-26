@@ -9,7 +9,8 @@ from flask import current_app
 
 from . import recording_store
 from .common import ApiError, deadline
-from .db import db, run, utcnow
+from .db import db, utcnow
+from .queries import recordings as recording_queries
 
 # 브라우저의 녹음 형식은 16 kHz, 16비트, 모노 PCM이다. 1초분은 32,000바이트다.
 # 앞의 44바이트를 WAV 헤더 자리에 남겨 두고 최종 길이가 정해지면 그 자리를 채운다.
@@ -27,9 +28,9 @@ def idle_deadline():
 def reserve_voice(voice_id):
     # 통화 ID를 녹취 ID와 요청 ID로 함께 써서 인계·요약·종료가 같은 행을 찾게 한다.
     # PENDING 동안 size_bytes는 저장이 확인된 PCM 본문의 길이이며 처음에는 0이다.
-    run("INSERT INTO recording (recording_id,upload_request_id,state,object_key,size_bytes,expires_at) "
-        "VALUES (%s,%s,'PENDING',%s,0,%s)",
-        (voice_id, voice_id, recording_store.object_key(voice_id), idle_deadline()))
+    recording_queries.reserve_voice_recording(
+        voice_id, recording_store.object_key(voice_id), current_app.config["S3_RECORDING_BUCKET"], idle_deadline(),
+    )
 
 
 def partial_path(voice_id):
@@ -59,6 +60,8 @@ def append_voice(item, offset, data):
     if offset > total or (offset < total < end):
         raise ApiError("REQUEST_KEY_CONFLICT")
     path = partial_path(item["recording_id"])
+    if not total:
+        path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("r+b" if total else "w+b") as audio:
         if total and os.fstat(audio.fileno()).st_size < HEADER_BYTES + total:
             raise OSError("Incomplete voice recording")
@@ -72,8 +75,7 @@ def append_voice(item, offset, data):
         audio.flush()
         os.fsync(audio.fileno())
     # 파일 쓰기를 디스크에 반영한 후에만 DB의 수신 길이를 늘린다. 이후 요청은 이 길이를 기준으로 삼는다.
-    run("UPDATE recording SET size_bytes=%s,expires_at=%s WHERE recording_id=%s",
-        (end, idle_deadline(), item["recording_id"]))
+    recording_queries.record_progress(item["recording_id"], end, idle_deadline())
 
 
 def finalize_voice(item):
@@ -86,8 +88,7 @@ def finalize_voice(item):
     length = item["size_bytes"]
     if not length:
         remove_partial(rid)
-        run("UPDATE recording SET state='DESTROYED',object_key=NULL,size_bytes=NULL,label=NULL,destroyed_at=UTC_TIMESTAMP(6) "
-            "WHERE recording_id=%s", (rid,))
+        recording_queries.discard_empty_recording(rid)
         return False
     # DB에서 확인한 PCM 길이를 RIFF 전체 크기 필드와 data 길이 필드에 반영해 헤더를 만든다.
     header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + length, b"WAVE", b"fmt ", 16, 1, 1,
@@ -102,9 +103,10 @@ def finalize_voice(item):
         audio.seek(0)
         checksum = hashlib.file_digest(audio, "sha256").digest()
         audio.seek(0)
-        recording_store.put_audio(item["object_key"], audio)
-    run("UPDATE recording SET state='READY',size_bytes=%s,sha256=%s,stored_at=UTC_TIMESTAMP(6),expires_at=%s "
-        "WHERE recording_id=%s", (HEADER_BYTES + length, checksum, deadline("RECORDING_RETENTION_MINUTES", 5), rid))
+        recording_store.put_audio(item, audio)
+    recording_queries.finish_voice_recording(
+        rid, HEADER_BYTES + length, checksum, deadline("RECORDING_RETENTION_MINUTES", 5),
+    )
     # 완성 파일과 READY 상태를 확정한 후 임시본을 지운다. DB 확정 전에는 원본을 이용해 재시도할 수 있다.
     db().commit()
     try:

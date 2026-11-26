@@ -10,8 +10,13 @@ from .common import (
     content_visible, customer_session, deadline, digest, payload, staff_user, status,
     text_field, uuid_field, writable,
 )
-from .db import admin_change, new_id, one, rows, run, stamp, utcnow
+from .db import admin_change, new_id, stamp, utcnow
 from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS
+from .queries import cases as case_queries
+from .queries import chat as chat_queries
+from .queries import recordings as recording_queries
+from .queries import staff as staff_queries
+from .queries import voice as voice_queries
 from .recordings import recording_info
 
 # 거래소의 접수 API, 직원 데스크, 고객 채팅이 같은 티켓 데이터를 사용한다.
@@ -43,10 +48,7 @@ def exchange_cases():
     if request.method == "GET":
         subject = uuid_field(request.args.get("support_subject_ref"))
         kind = intake_channel(request.args.get("channel", "WEB"))
-        items = rows(
-            "SELECT * FROM visible_case WHERE support_subject_ref=%s AND channel=%s ORDER BY opened_at DESC,case_id",
-            (subject, kind),
-        )
+        items = case_queries.for_subject(subject, kind)
         return {"items": [{"case_id": case["case_id"], "status": status(case)} for case in items]}
 
     # POST는 거래소의 접수 요청 ID를 필수로 받는다. Flask는 반환한 딕셔너리를 JSON으로 만들고,
@@ -67,12 +69,8 @@ def intake_case(subject, intake, kind, inquiry_type=None):
     if inquiry_type is not None and (not isinstance(inquiry_type, str) or inquiry_type not in TOPICS):
         raise ApiError("INVALID_INPUT")
     candidate = new_id()
-    run(
-        "INSERT INTO support_case (case_id, channel, support_subject_ref, intake_request_id,inquiry_type) "
-        "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE case_id=case_id",
-        (candidate, kind, subject, intake, inquiry_type),
-    )
-    case = one("SELECT case_id,channel,support_subject_ref,deleted_at FROM support_case WHERE intake_request_id=%s", (intake,))
+    case_queries.insert_intake(candidate, kind, subject, intake, inquiry_type)
+    case = case_queries.by_intake(intake)
     # 삭제된 티켓의 키로 다시 접수할 수 없다. 기존 키의 고객 또는 채널이 다르면 키 충돌이다.
     if case["deleted_at"]:
         raise ApiError("TICKET_DELETED")
@@ -81,7 +79,7 @@ def intake_case(subject, intake, kind, inquiry_type=None):
     created = case["case_id"] == candidate
     # 이번 호출이 새 전화 티켓을 만든 경우에만 응대 내용을 채울 빈 행도 한 번 생성한다.
     if created and kind == "PHONE":
-        run("INSERT INTO phone_response (case_id) VALUES (%s)", (candidate,))
+        voice_queries.create_phone_response(candidate)
     return case["case_id"], created
 
 
@@ -97,7 +95,7 @@ def grant_entry(case_id):
         raise ApiError("CASE_NOT_FOUND")
     code = secrets.token_urlsafe(32)
     expires = deadline("ENTRY_CODE_MINUTES", 5)
-    run("INSERT INTO entry_code (code_hash, case_id, expires_at) VALUES (%s,%s,%s)", (digest(code), case_id, expires))
+    chat_queries.issue_entry_code(digest(code), case_id, expires)
     return {"case_id": case_id, "entry_code": code, "expires_at": stamp(expires)}, 201
 
 
@@ -107,9 +105,9 @@ def staff_cases():
     user = staff_user()
     g.audit_target = ("CASE_LIST", None, None)
     if user["role"] == "ADMIN":
-        result = rows("SELECT * FROM visible_case ORDER BY opened_at DESC")
+        result = case_queries.all_cases()
     else:
-        result = rows("SELECT * FROM visible_case WHERE current_agent_id=%s ORDER BY opened_at DESC", (user["staff_id"],))
+        result = case_queries.assigned_cases(user["staff_id"])
     return {"items": [case_info(case) for case in result]}
 
 
@@ -117,17 +115,13 @@ def staff_cases():
 def agents():
     # 관리자 재배정 화면에서 고를 수 있는 활성 상담원의 ID와 로그인 이름만 반환한다.
     admin()
-    return {"items": rows("SELECT staff_id, login_id FROM staff_account WHERE role='AGENT' AND is_active=1 ORDER BY login_id")}
+    return {"items": staff_queries.active_agents()}
 
 
 def waiting_tickets():
     # 아직 종결되지 않은 미배정 티켓을 대기열에 넣는다. 처음 대기하는 경우 접수 시각,
     # 담당자가 해제되어 돌아온 경우 마지막 배정 해제 시각부터 기다린 것으로 계산한다.
-    items = rows(
-        "SELECT c.case_id,c.channel,c.inquiry_type,c.opened_at, COALESCE((SELECT MAX(a.changed_at) FROM assignment_history a "
-        "WHERE a.case_id=c.case_id AND a.new_agent_id IS NULL),c.opened_at) AS queued_at FROM visible_case c "
-        "WHERE c.current_agent_id IS NULL AND c.closed_at IS NULL ORDER BY queued_at,c.case_id"
-    )
+    items = case_queries.waiting_cases()
     for item in items:
         item["wait_seconds"] = int((utcnow() - item.pop("queued_at")).total_seconds())
         item["opened_at"] = stamp(item["opened_at"])
@@ -137,13 +131,7 @@ def waiting_tickets():
 def agent_inbox(staff_id):
     # 담당 티켓의 미리보기는 전화라면 문의 내용, 웹이라면 삭제되지 않은 마지막 메시지의 앞 100자다.
     # 보관 기한이 지나면 목록에는 티켓 정보와 만료 여부만 남기고 미리보기는 비운다.
-    items = rows(
-        "SELECT c.*, CASE WHEN c.channel='PHONE' THEN LEFT(p.inquiry,100) ELSE "
-        "(SELECT LEFT(m.body,100) FROM chat_message m WHERE m.case_id=c.case_id AND m.body<>'' "
-        "ORDER BY m.message_id DESC LIMIT 1) END AS preview "
-        "FROM visible_case c LEFT JOIN phone_response p ON p.case_id=c.case_id "
-        "WHERE c.current_agent_id=%s ORDER BY c.opened_at DESC, c.case_id", (staff_id,),
-    )
+    items = case_queries.inbox(staff_id)
     result = []
     for item in items:
         expired = not content_visible(item)
@@ -153,12 +141,7 @@ def agent_inbox(staff_id):
 
 def recent_closed_cases(staff_id):
     # 담당자의 최근 종결 티켓 여섯 건에 아직 재생 가능한 최신 녹취 한 건의 ID를 붙인다.
-    items = rows(
-        "SELECT c.*, (SELECT r.recording_id FROM recording r WHERE r.case_id=c.case_id AND r.state='READY' "
-        "AND r.expires_at>UTC_TIMESTAMP(6) ORDER BY r.stored_at DESC,r.recording_id LIMIT 1) AS clip_id "
-        "FROM visible_case c WHERE c.current_agent_id=%s AND c.closed_at IS NOT NULL "
-        "ORDER BY c.closed_at DESC,c.case_id LIMIT 6", (staff_id,),
-    )
+    items = case_queries.recently_closed(staff_id)
     return [dict(case_info(item), clip_id=item["clip_id"]) for item in items]
 
 
@@ -180,14 +163,14 @@ def assign(case_id):
     if "previous_agent_id" in data and previous not in (data["previous_agent_id"], new_agent):
         raise ApiError("ASSIGNMENT_CHANGED")
     if previous != new_agent:
-        old = one("SELECT login_id FROM staff_account WHERE staff_id=%s", (previous,))
+        old = staff_queries.login_for_staff(previous)
         admin_change("상담 재배정", f"{old['login_id']} → {person['login_id']}", case_id)
     return set_assignee(case, new_agent, user["staff_id"])
 
 
 def lock_active_agent(staff_id):
     # 계정 비활성화와 배정이 겹쳐도 일관된 순서로 진행하도록, 활성 상담원 행에 쓰기 잠금을 건다.
-    person = one("SELECT login_id FROM staff_account WHERE staff_id=%s AND role='AGENT' AND is_active=1 FOR UPDATE", (staff_id,))
+    person = staff_queries.lock_active_agent(staff_id)
     if not person:
         raise ApiError("AGENT_UNAVAILABLE")
     return person
@@ -214,11 +197,8 @@ def set_assignee(case, new_agent, changed_by):
     # 수락·재배정·해제가 공유하는 갱신이다. 담당자가 실제로 달라질 때만 이력을 추가하고
     # 현재 담당자를 변경한다. new_agent가 None이면 대기열로 돌아간다.
     if case["current_agent_id"] != new_agent:
-        run(
-            "INSERT INTO assignment_history (case_id, previous_agent_id, new_agent_id, changed_by) VALUES (%s,%s,%s,%s)",
-            (case["case_id"], case["current_agent_id"], new_agent, changed_by),
-        )
-        run("UPDATE support_case SET current_agent_id=%s WHERE case_id=%s", (new_agent, case["case_id"]))
+        case_queries.log_assignment(case["case_id"], case["current_agent_id"], new_agent, changed_by)
+        case_queries.set_assignee(case["case_id"], new_agent)
         case["current_agent_id"] = new_agent
     return case_info(case)
 
@@ -226,11 +206,7 @@ def set_assignee(case, new_agent, changed_by):
 def phone_info(case_id):
     # 통화 일시·동의·안내 내역과 티켓에 저장한 통화 방향·길이를 합쳐 하나의 전화 응대로 반환한다.
     # 후속 조치의 NULL은 아직 입력하지 않았다는 뜻이므로 False와 구분한다.
-    phone = one(
-        "SELECT p.call_at,p.consent_state,p.inquiry,p.guidance,p.followup_required,c.call_direction,c.talk_seconds "
-        "FROM phone_response p JOIN support_case c USING(case_id) WHERE p.case_id=%s",
-        (case_id,),
-    )
+    phone = voice_queries.phone_response(case_id)
     if phone:
         phone["call_at"] = stamp(phone["call_at"])
         if phone["followup_required"] is not None:
@@ -240,30 +216,14 @@ def phone_info(case_id):
 
 def assignment_log(case_id):
     # 변경 순서대로 배정 시각과 새 담당자의 로그인 이름을 반환한다. 배정 해제 행은 이름이 비어 있다.
-    assignments = rows(
-        "SELECT a.changed_at, s.login_id FROM assignment_history a "
-        "LEFT JOIN staff_account s ON s.staff_id=a.new_agent_id "
-        "WHERE a.case_id=%s ORDER BY a.assignment_id", (case_id,),
-    )
+    assignments = case_queries.assignment_history(case_id)
     return [{"login_id": a["login_id"], "at": stamp(a["changed_at"])} for a in assignments]
 
 
 def staff_notes(case_id=None, *, agent_id=None):
     # 보관 기한 안의 티켓에서 본문이 남은 직원 메모만 읽는다. 관리자 전체 이력에는 기본 범위를,
     # 상담원 화면에는 티켓 ID와 현재 담당자 ID 조건을 함께 적용한다.
-    sql = (
-        "SELECT n.note_id,n.case_id,n.body,n.created_at,n.updated_at,a.login_id FROM staff_note n "
-        "JOIN staff_account a ON a.staff_id=n.created_by JOIN visible_case c ON c.case_id=n.case_id "
-        "WHERE n.body IS NOT NULL AND (c.content_expires_at IS NULL OR c.content_expires_at>UTC_TIMESTAMP(6))"
-    )
-    args = []
-    if case_id is not None:
-        sql += " AND n.case_id=%s"
-        args.append(case_id)
-    if agent_id is not None:
-        sql += " AND c.current_agent_id=%s"
-        args.append(agent_id)
-    notes = rows(sql + " ORDER BY n.note_id DESC", args)
+    notes = case_queries.staff_notes(case_id, agent_id=agent_id)
     for note in notes:
         note.update(created_at=stamp(note["created_at"]), updated_at=stamp(note["updated_at"]))
     return notes
@@ -276,7 +236,7 @@ def case_detail(case_id):
     g.audit_target = ("CASE_VIEW", case_id, None)
     case = assigned_case(case_id)
     visible = content_visible(case)
-    recs = rows("SELECT * FROM recording WHERE case_id=%s ORDER BY expires_at DESC", (case_id,))
+    recs = recording_queries.for_case(case_id)
     return {
         "case": case_info(case), "result_note": case["result_note"] if visible else None,
         "customer_ref": case["support_subject_ref"] if visible else None, "content_expired": not visible,
@@ -304,7 +264,7 @@ def categorize(case_id):
     category = payload().get("inquiry_type")
     if not isinstance(category, str) or category not in TOPICS:
         raise ApiError("INVALID_INPUT")
-    run("UPDATE support_case SET inquiry_type=%s WHERE case_id=%s", (category,case_id))
+    case_queries.set_category(case_id, category)
     return {"inquiry_type": category}
 
 
@@ -352,21 +312,17 @@ def save_phone_response(case_id, data, allow_clear=False):
         consent = data["consent_state"]
         if consent not in ("AGREED", "REFUSED"):
             raise ApiError("INVALID_INPUT")
-        current = one("SELECT consent_state FROM phone_response WHERE case_id=%s", (case_id,))
+        current = voice_queries.recording_consent(case_id)
         # 동의 상태가 바뀔 때만 처리자와 시각을 기록한다. 거부하면 기존 녹취도 삭제 대기로
         # 전환해 재생을 막고, 실제 파일 삭제는 정리 작업이 수행한다.
         edits["consent_state"] = consent
         if current["consent_state"] != consent:
             edits.update(consent_by=g.actor, consent_at=utcnow())
         if consent == "REFUSED":
-            run("UPDATE recording SET state='DELETE_PENDING' WHERE case_id=%s AND state IN ('READY','FAILED','PENDING')", (case_id,))
+            recording_queries.mark_case_for_deletion(case_id)
     if not edits and not metrics:
         raise ApiError("INVALID_INPUT")
-    for table, values in (("phone_response", edits), ("support_case", metrics)):
-        # 값을 담은 테이블만 UPDATE한 뒤 전화 응대 전체를 다시 읽어 호출자에게 돌려준다.
-        if values:
-            columns = ", ".join(f"{key}=%s" for key in values)
-            run(f"UPDATE {table} SET {columns} WHERE case_id=%s", (*values.values(), case_id))
+    voice_queries.update_phone_response(case_id, edits, metrics)
     return phone_info(case_id)
 
 
@@ -391,10 +347,7 @@ def close_case(case_id):
             outcome = "FOLLOWUP" if phone["followup_required"] else "RESOLVED"
     case["closed_at"] = utcnow()
     # 종결 시점에 본문 보관 기한도 정한다. 조회 경로와 만료 정리 작업이 이 기한을 함께 사용한다.
-    run(
-        "UPDATE support_case SET closed_at=%s,result_note=%s,outcome=%s,content_expires_at=%s WHERE case_id=%s",
-        (case["closed_at"], note, outcome, deadline("CASE_RETENTION_MINUTES", 5), case_id),
-    )
+    case_queries.close(case_id, case["closed_at"], note, outcome, deadline("CASE_RETENTION_MINUTES", 5))
     case["outcome"] = outcome
     return case_info(case)
 
@@ -438,12 +391,12 @@ def messages(case_id):
         history = []
         # 본문 기한이 지나면 빈 목록을 반환하되, 화면이 갱신할 읽기 전용 여부와 티켓 상태는 전달한다.
         if content_visible(case):
-            history = rows("SELECT * FROM chat_message WHERE case_id=%s AND body<>'' ORDER BY message_id", (case_id,))
+            history = chat_queries.messages(case_id)
         return {"items": [message_info(row) for row in history], "read_only": bool(case["closed_at"]), "status": status(case)}
     data = payload()
     message_key = uuid_field(data.get("client_message_id"))
     body = text_field(data.get("body"))
-    existing = one("SELECT * FROM chat_message WHERE case_id=%s AND client_message_id=%s", (case_id, message_key))
+    existing = chat_queries.message_by_request(case_id, message_key)
     # 서버 응답을 못 받아 같은 전송을 재시도할 수 있다. 기한 안에 같은 키·작성자·본문이 확인되면
     # 종결 여부를 검사하기 전에 기존 메시지를 반환한다. 삭제된 본문이나 내용이 다른 재사용은 오류다.
     if existing and content_visible(case):
@@ -454,8 +407,5 @@ def messages(case_id):
         return message_info(existing)
     # 새 메시지는 열린 티켓에서만 저장하며, 저장한 행의 서버 시각과 ID를 201 응답에 담는다.
     writable(case)
-    msg_id = run(
-        "INSERT INTO chat_message (case_id, client_message_id, author_staff_id, body) VALUES (%s,%s,%s,%s)",
-        (case_id, message_key, author, body),
-    )
-    return message_info(one("SELECT * FROM chat_message WHERE message_id=%s", (msg_id,))), 201
+    msg_id = chat_queries.add_message(case_id, message_key, author, body)
+    return message_info(chat_queries.message(msg_id)), 201

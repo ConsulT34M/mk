@@ -5,7 +5,8 @@
 ## 폴더 구성
 
 - `app/`에 Flask 코드가 있습니다. 화면 템플릿은 `app/templates/`, 스타일·스크립트·서비스 로고는 `app/static/`, 상담 데스크 시안은 `app/static/prototype/`에 있습니다.
-- `mysql/schema.sql`은 데이터베이스 초기화 파일이고, `nginx/`에는 HTTPS 설정이 있습니다.
+- `app/queries/`는 상담(`cases`), 채팅(`chat`), 직원(`staff`), 전화·AI 통화(`voice`), 녹취(`recordings`), 통계(`reports`)별 SQL을 관리합니다.
+- `mysql/`에는 데이터베이스 초기화 파일(`schema.sql`)과 관리자·상담 데스크 마이그레이션 SQL이 있습니다. `nginx/`에는 HTTPS 설정이 있습니다.
 - `tests/`에는 상담 흐름 통합 테스트가 있습니다. 로컬 디자인 원본은 `design/`에 보관합니다.
 
 ## 실행
@@ -82,7 +83,7 @@ docker compose up -d --build --wait
 
 ## DB 변경 스크립트
 
-`app/desk_schema.sql`은 팀·공지·AI 설정 테이블과 계정·상담 통계 컬럼을 추가하고 조회 뷰를 갱신합니다. 적용 명령은 `flask migrate-desk`입니다. 기존 컬럼을 확인하므로 중단 후 다시 실행할 수 있습니다. 새 앱 이미지의 초기화(`flask init-admin`)도 같은 마이그레이션을 호출합니다.
+`mysql/desk_schema.sql`은 팀·공지·AI 설정 테이블과 계정·상담 통계 컬럼을 추가하고 조회 뷰를 갱신합니다. 적용 명령은 `flask migrate-desk`입니다. 기존 컬럼을 확인하므로 중단 후 다시 실행할 수 있습니다. 새 앱 이미지의 초기화(`flask init-admin`)도 같은 마이그레이션을 호출합니다.
 
 ## 거래소 연동
 

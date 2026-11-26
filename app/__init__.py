@@ -2,11 +2,13 @@ import json
 import os
 import secrets
 import time
+from pathlib import Path
 from threading import Thread
 from urllib.request import Request, urlopen
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import click
+from dotenv import load_dotenv
 from flask import Flask, g, jsonify, make_response, redirect, render_template, request, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -17,8 +19,12 @@ from .common import (
     CHAT_COOKIE, INQUIRY_COOKIE, STAFF_COOKIE, ApiError, agent, case_row, customer_session, deadline, digest,
     payload, staff_user, text_field,
 )
-from .db import audit, close_db, db as get_db, new_id, one, run, stamp, utcnow
+from .db import audit, check_connection, close_db, db as get_db, new_id, stamp, utcnow
 from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, case_status_breakdown, duration, notices, report_range, statistics
+from .queries import cases as case_queries
+from .queries import chat as chat_queries
+from .queries import staff as staff_queries
+from .queries import voice as voice_queries
 from .recordings import purge, recordings as recordings_blueprint
 from .voice import voice
 from .voice_summaries import summary_worker
@@ -26,12 +32,14 @@ from .voice_summaries import summary_worker
 # 이 모듈에서 Flask 앱을 만들고 상담 티켓, 녹취, 관리자, 음성 상담 라우트를 연결한다.
 # 각 Blueprint의 뷰도 아래에 등록한 앱 공통 훅을 거쳐 응답한다.
 app = Flask(__name__)
+load_dotenv(Path(app.root_path).parent / ".env", override=False)
 # HTTPS를 종료하는 프록시가 전달한 프로토콜을 반영해 request.host_url을 구성한다.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
 # WAV_LIMIT는 파일 자체의 상한이다. 전체 요청에는 multipart 필드와 헤더를 담을 여유를 둔다.
 app.config["WAV_LIMIT"] = int(os.getenv("WAV_MAX_MIB", 10)) * 1024 * 1024
 app.config["MAX_CONTENT_LENGTH"] = app.config["WAV_LIMIT"] + 128 * 1024
 app.config["RECORDING_DIR"] = os.getenv("RECORDING_DIR", "/var/lib/tm-recordings")
+app.config["S3_RECORDING_BUCKET"] = os.getenv("S3_RECORDING_BUCKET", "").strip() or None
 # 요청이나 CLI 명령의 앱 컨텍스트가 끝나면 그 작업에서 열었던 DB 연결을 닫는다.
 app.teardown_appcontext(close_db)
 # Blueprint 안의 @...get, @...post 등으로 선언한 경로가 여기서 앱의 URL 목록에 등록된다.
@@ -144,7 +152,7 @@ def login():
     password = data.get("password")
     if not isinstance(password, str) or not password or len(password) > 512:
         raise ApiError("INVALID_INPUT")
-    user = one("SELECT * FROM staff_account WHERE login_id=%s AND is_active=1 FOR UPDATE", (login_id,))
+    user = staff_queries.lock_login(login_id)
     if not user or not check_password_hash(user["password_hash"], password):
         raise ApiError("STAFF_AUTH_REQUIRED")
     # 이 브라우저가 제시한 이전 세션을 교체한다. DB에는 새 토큰의 해시만 보관한다.
@@ -152,8 +160,8 @@ def login():
     expires = deadline("STAFF_SESSION_MINUTES", 30)
     previous = request.cookies.get(STAFF_COOKIE)
     if previous:
-        run("DELETE FROM staff_session WHERE token_hash=%s", (digest(previous),))
-    run("INSERT INTO staff_session (token_hash,staff_id,expires_at) VALUES (%s,%s,%s)", (digest(token), user["staff_id"], expires))
+        staff_queries.delete_session(digest(previous))
+    staff_queries.create_session(digest(token), user["staff_id"], expires)
     destination = staff_home(user)
     # 폼 제출 후에는 303으로 역할별 첫 화면을 GET하게 하고, JSON 호출에는 목적지와 만료 시각을 준다.
     response = redirect(destination, code=303) if form_login else jsonify(
@@ -166,7 +174,7 @@ def login():
 def logout():
     # 현재 쿠키에 해당하는 서버 세션을 삭제한 뒤, 204 응답으로 브라우저의 쿠키도 지운다.
     staff_user()
-    run("DELETE FROM staff_session WHERE token_hash=%s", (digest(request.cookies[STAFF_COOKIE]),))
+    staff_queries.delete_session(digest(request.cookies[STAFF_COOKIE]))
     response = make_response("", 204)
     response.delete_cookie(STAFF_COOKIE, secure=True, httponly=True, samesite="Lax")
     return response
@@ -179,21 +187,20 @@ def enter_chat(code, as_page=False):
     key = digest(code)
     # 티켓 삭제 경로와 잠금 순서를 맞춘다. 티켓을 먼저 잠그고 이어서 코드 행을 잠가
     # 동시에 두 요청이 들어와도 한 요청만 미사용 코드를 소비할 수 있게 한다.
-    case = one("SELECT case_id,closed_at FROM visible_case WHERE case_id="
-               "(SELECT case_id FROM entry_code WHERE code_hash=%s) FOR UPDATE", (key,))
+    case = chat_queries.lock_case_for_entry(key)
     if not case:
         raise ApiError("ENTRY_CODE_UNUSABLE")
-    item = one("SELECT * FROM entry_code WHERE code_hash=%s FOR UPDATE", (key,))
+    item = chat_queries.lock_entry_code(key)
     if not item or item["used_at"] or item["expires_at"] <= utcnow():
         raise ApiError("ENTRY_CODE_UNUSABLE")
     # 코드 사용 표시, 기존 채팅 세션 교체, 새 세션 발급은 한 요청의 트랜잭션에서 처리한다.
-    run("UPDATE entry_code SET used_at=UTC_TIMESTAMP(6) WHERE code_hash=%s", (key,))
+    chat_queries.consume_entry_code(key)
     previous = request.cookies.get(CHAT_COOKIE)
     if previous:
-        run("DELETE FROM customer_session WHERE token_hash=%s", (digest(previous),))
+        chat_queries.delete_session(digest(previous))
     token = secrets.token_urlsafe(32)
     expires = deadline("CHAT_SESSION_MINUTES", 60)
-    run("INSERT INTO customer_session (token_hash,case_id,expires_at) VALUES (%s,%s,%s)", (digest(token), item["case_id"], expires))
+    chat_queries.create_session(digest(token), item["case_id"], expires)
     # 종결된 티켓도 입장할 수 있다. JSON에는 읽기 전용 여부를 담고 폼은 채팅 화면으로 이동시킨다.
     if as_page:
         response = redirect(url_for("chat_page"), code=303)
@@ -217,7 +224,7 @@ def enter_form():
 @app.get("/health")
 def health():
     # 간단한 SQL까지 성공해야 정상으로 응답하므로 DB 연결 상태도 함께 확인된다.
-    one("SELECT 1 AS ok")
+    check_connection()
     return {"status": "ok"}
 
 
@@ -313,7 +320,7 @@ def agent_desk(user, detail=None):
             if tab == "recordings":
                 data["calls"] = call_history(user["staff_id"], dates)
             else:
-                team = one("SELECT name FROM staff_team WHERE team_id=%s", (user["team_id"],)) if user["team_id"] else None
+                team = staff_queries.team_name(user["team_id"]) if user["team_id"] else None
                 own_team = bool(team and request.args.get("scope") == "team")
                 data.update(team=team, scope="team" if own_team else "mine",
                             report=statistics(dates, staff_id=user["staff_id"], own_team=own_team))
@@ -380,8 +387,8 @@ def inquiry_page():
     visitor = customer_session(INQUIRY_COOKIE)
     case = None
     if visitor and visitor["case_id"]:
-        case = one("SELECT case_id,current_agent_id,closed_at FROM visible_case WHERE case_id=%s", (visitor["case_id"],))
-    policy_on = bool(one("SELECT enabled FROM voice_policy WHERE policy_id=1")["enabled"])
+        case = case_queries.inquiry_status(visitor["case_id"])
+    policy_on = bool(voice_queries.policy()["enabled"])
     # 운영자가 정한 음성 상담 상태와 실제 시작 가능 여부(서버 키 설정 포함)를 화면에 각각 전달한다.
     response = make_response(render_template("inquiry.html", case=case, opened=request.args.get("chat") == "open", policy_on=policy_on,
                                              voice_enabled=policy_on and bool(os.environ.get("OPENAI_API_KEY", "").strip()),
@@ -390,7 +397,7 @@ def inquiry_page():
         # 첫 방문에서는 티켓 없이 방문 세션만 발급한다. 채팅 접수는 open_inquiry에서 처리한다.
         token = secrets.token_urlsafe(32)
         expires = deadline("CHAT_SESSION_MINUTES", 60)
-        run("INSERT INTO customer_session (token_hash,expires_at) VALUES (%s,%s)", (digest(token), expires))
+        chat_queries.create_visitor_session(digest(token), expires)
         session_cookie(response, INQUIRY_COOKIE, token, expires)
     return response
 
@@ -404,14 +411,13 @@ def open_inquiry():
     previous = visitor["case_id"]
     # 첫 접수이거나 폼의 직전 티켓 ID가 현재 연결된 종결 티켓과 일치할 때만 새 문의를 만든다.
     # 이미 처리한 폼이 다시 제출되면 기존에 연결된 상담으로 돌아간다.
-    new_inquiry = previous and request.form.get("closed_case_id") == previous and one(
-        "SELECT case_id FROM visible_case WHERE case_id=%s AND closed_at IS NOT NULL", (previous,))
+    new_inquiry = previous and request.form.get("closed_case_id") == previous and case_queries.closed_case(previous)
     response = redirect(url_for("inquiry_page", chat="open"), code=303)
     if previous is None or new_inquiry:
         case_id, _ = intake_case(new_id(), new_id(), "WEB", request.form.get("inquiry_type") or None)
         token = request.cookies[INQUIRY_COOKIE]
         expires = deadline("CHAT_SESSION_MINUTES", 60)
-        run("UPDATE customer_session SET case_id=%s,expires_at=%s WHERE token_hash=%s", (case_id, expires, digest(token)))
+        chat_queries.link_session(digest(token), case_id, expires)
         session_cookie(response, INQUIRY_COOKIE, token, expires)
     return response
 
@@ -425,26 +431,16 @@ def demo_id(label):
 def seed_demo():
     """Create the local demo's staff accounts, two web cases and one phone case."""
     # 계정 테이블이 비었을 때만 데모 직원을 만든다. 티켓은 고정 ID를 써서 재실행 때 중복 접수를 막는다.
-    if not one("SELECT staff_id FROM staff_account LIMIT 1"):
+    if not staff_queries.any_account():
         for login_id, role in (("admin", "ADMIN"), ("test", "AGENT"), ("agent1", "AGENT"), ("agent2", "AGENT")):
             password = "test" if login_id == "test" else os.environ[f"DEMO_{login_id.upper()}_PASSWORD"]
-            run(
-                "INSERT INTO staff_account (staff_id,login_id,password_hash,role) VALUES (%s,%s,%s,%s)",
-                (new_id(), login_id, generate_password_hash(password), role),
-            )
+            staff_queries.seed_account(new_id(), login_id, generate_password_hash(password), role)
     for n in (1, 2):
-        run(
-            "INSERT INTO support_case (case_id, channel, support_subject_ref, intake_request_id) "
-            "VALUES (%s,'WEB',%s,%s) ON DUPLICATE KEY UPDATE case_id=case_id",
-            (demo_id(f"web-{n}"), demo_id(f"subject-{n}"), demo_id(f"intake-{n}")),
-        )
+        case_queries.seed_web_case(demo_id(f"web-{n}"), demo_id(f"subject-{n}"), demo_id(f"intake-{n}"))
     phone_id = demo_id("phone")
-    if not one("SELECT case_id FROM support_case WHERE case_id=%s", (phone_id,)):
-        run(
-            "INSERT INTO support_case (case_id,channel,support_subject_ref,intake_request_id) VALUES (%s,'PHONE',%s,%s)",
-            (phone_id, demo_id("subject-1"), demo_id("intake-phone")),
-        )
-        run("INSERT INTO phone_response (case_id) VALUES (%s)", (phone_id,))
+    if not case_queries.existing_case(phone_id):
+        case_queries.seed_phone_case(phone_id, demo_id("subject-1"), demo_id("intake-phone"))
+        voice_queries.create_phone_response(phone_id)
     get_db().commit()
 
 

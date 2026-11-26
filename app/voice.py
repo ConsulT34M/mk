@@ -8,7 +8,9 @@ from flask import Blueprint, request
 
 from .cases import intake_case
 from .common import INQUIRY_COOKIE, ApiError, customer_session, digest, payload
-from .db import audit, new_id, one, run
+from .db import audit, new_id
+from .queries import recordings as recording_queries
+from .queries import voice as voice_queries
 from .voice_recording import append_voice, finalize_voice, reserve_voice
 
 # 공개 문의 화면의 음성 상담 API다. 방문 쿠키로 통화의 소유자를 확인하고 voice_id로
@@ -19,7 +21,7 @@ voice = Blueprint("voice", __name__, url_prefix="/inquiry/voice")
 def client_secret():
     # 운영 설정과 서버 키를 확인한 뒤 브라우저가 음성 서비스에 연결할 단기 자격 증명을 요청한다.
     # 모델·목소리·상담 원칙과 상담원 접수 도구의 형식은 서버에서 결정한다.
-    policy = one("SELECT enabled,instructions,offer_handoff FROM voice_policy WHERE policy_id=1")
+    policy = voice_queries.policy()
     if not policy["enabled"]:
         raise ApiError("VOICE_DISABLED")
     key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -93,14 +95,13 @@ def start():
     # 방문 세션을 다시 확인하고 잠가 이 브라우저와 새 음성 세션을 연결한다.
     owner = visitor_hash(lock=True)
     voice_id = new_id()
-    run("INSERT INTO voice_session (voice_id,owner_hash,subject_ref) VALUES (%s,%s,%s)",
-        (voice_id, owner, new_id()))
+    voice_queries.create_session(voice_id, owner, new_id())
     if consent:
         # 동의한 경우만 녹취 행을 예약한다. 요약에도 동의했으면 작업을 미리 등록해 두고
         # 실제 요약은 녹취가 READY가 된 뒤 별도 작업자가 실행한다.
         reserve_voice(voice_id)
         if summary_consent:
-            run("INSERT INTO ai_call_summary (recording_id) VALUES (%s)", (voice_id,))
+            voice_queries.add_summary(voice_id)
     audit("VOICE_RECORDING_AGREED" if consent else "VOICE_RECORDING_REFUSED", "customer", recording_id=voice_id)
     return {"voice_id": voice_id, "client_secret": secret}, 201
 
@@ -110,14 +111,14 @@ def handoff(voice_id):
     # 문의 쿠키의 소유자와 통화 ID가 함께 일치해야 상담원 대기 티켓을 접수할 수 있다.
     payload()
     owner = visitor_hash(lock=True)
-    session = one("SELECT subject_ref FROM voice_session WHERE voice_id=%s AND owner_hash=%s", (voice_id, owner))
+    session = voice_queries.owned_session(voice_id, owner)
     if not session:
         raise ApiError("VOICE_SESSION_NOT_FOUND")
     # 음성 세션 ID 자체를 접수 요청 키로 쓴다. 같은 통화에서 인계 도구를 다시 호출해도
     # 최초 전화 티켓을 반환한다. 최초 접수 때 이미 예약된 AI 녹취가 있으면 그 티켓에 연결한다.
     case_id, created = intake_case(session["subject_ref"], voice_id, "PHONE")
     if created:
-        run("UPDATE recording SET case_id=%s WHERE recording_id=%s AND uploaded_by IS NULL", (case_id, voice_id))
+        recording_queries.link_voice_case(voice_id, case_id)
     return {"case_id": case_id}, 201 if created else 200
 
 
@@ -125,9 +126,9 @@ def owned_recording(voice_id):
     # 방문자와 통화의 소유 관계를 먼저 확인한 뒤 AI 녹취 행을 잠근다.
     # 유효한 통화여도 녹취에 동의하지 않았다면 예약 행이 없어 None을 반환한다.
     owner = visitor_hash(lock=True)
-    if not one("SELECT 1 FROM voice_session WHERE voice_id=%s AND owner_hash=%s", (voice_id, owner)):
+    if not voice_queries.owned_session(voice_id, owner):
         raise ApiError("VOICE_SESSION_NOT_FOUND")
-    return one("SELECT * FROM recording WHERE recording_id=%s AND uploaded_by IS NULL FOR UPDATE", (voice_id,))
+    return recording_queries.lock_voice_recording(voice_id)
 
 
 @voice.post("/sessions/<uuid:voice_id>/recording/<int:offset>")
@@ -157,7 +158,7 @@ def end(voice_id):
         if error.code == "VOICE_SESSION_NOT_FOUND":
             return "", 204
         raise
-    run("DELETE FROM voice_session WHERE voice_id=%s", (voice_id,))
+    voice_queries.end_session(voice_id)
     # 녹취에 동의한 통화는 수신한 음성을 WAV로 확정하고 실제 저장 여부를 JSON으로 알려 준다.
     # 녹취 예약이 없는 통화는 응답 본문 없이 종료한다.
     try:

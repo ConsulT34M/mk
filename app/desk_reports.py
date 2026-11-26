@@ -4,7 +4,9 @@ from math import cos, sin, tau
 from flask import request
 
 from .common import ApiError
-from .db import one, rows, utcnow
+from .db import utcnow
+from .queries import reports as report_queries
+from .queries.staff import notices
 
 # 화면의 달력과 일별 집계는 한국 시간을 기준으로 한다. MySQL에 저장한 일시는 UTC다.
 KST = timedelta(hours=9)
@@ -92,14 +94,9 @@ def dashboard_charts(channel=None):
         end = start + timedelta(days=1)
     else:
         raise ApiError("INVALID_INPUT")
-    channel_args = (channel,) if channel in ("WEB", "PHONE") else ()
-    scope = "WHERE opened_at>=%s AND opened_at<%s" + (" AND channel=%s" if channel_args else "")
-    counts = rows("SELECT inquiry_type, COUNT(*) AS n FROM visible_case " + scope + " GROUP BY inquiry_type",
-                  (midnight(start), midnight(end), *channel_args))
-    # 시간대별 접수량은 선택한 분포 기간과 별개로 항상 한국의 오늘을 0~23시로 나눈다.
-    # 접수가 없는 시간도 두 채널 모두 0으로 채워 템플릿이 24칸을 그릴 수 있게 한다.
-    hourly = rows("SELECT HOUR(opened_at + INTERVAL 9 HOUR) AS h, SUM(channel='WEB') AS web, SUM(channel='PHONE') AS phone "
-                  "FROM visible_case " + scope + " GROUP BY h", (midnight(current), midnight(current + timedelta(days=1)), *channel_args))
+    counts, hourly = report_queries.dashboard_counts(
+        midnight(start), midnight(end), midnight(current), midnight(current + timedelta(days=1)), channel
+    )
     slots = [{"web": 0, "phone": 0} for _ in range(24)]
     for row in hourly:
         slots[row["h"]] = {"web": int(row["web"]), "phone": int(row["phone"])}
@@ -112,60 +109,29 @@ def channel_metrics(kind):
     # 선택 채널의 오늘 종결 건수와 현재 대기 건수를 센다. 최장 대기는 마지막 배정 해제 또는 접수부터,
     # 평균 응답 시간(asa)은 오늘 처음 배정된 티켓의 최초 접수부터 최초 배정까지로 계산한다.
     start = midnight(today())
-    result = one(
-        "SELECT COUNT(CASE WHEN c.closed_at>=%s THEN 1 END) AS completed, "
-        "SUM(c.closed_at IS NULL AND c.current_agent_id IS NULL) AS waiting, "
-        "MAX(CASE WHEN c.closed_at IS NULL AND c.current_agent_id IS NULL "
-        "THEN TIMESTAMPDIFF(SECOND,COALESCE(a.requeued,c.opened_at),UTC_TIMESTAMP(6)) END) AS longest, "
-        "AVG(CASE WHEN a.accepted>=%s THEN TIMESTAMPDIFF(SECOND,c.opened_at,a.accepted) END) AS asa "
-        "FROM visible_case c LEFT JOIN (SELECT case_id,MIN(IF(new_agent_id IS NOT NULL,changed_at,NULL)) AS accepted, "
-        "MAX(IF(new_agent_id IS NULL,changed_at,NULL)) AS requeued FROM assignment_history GROUP BY case_id) a USING(case_id) "
-        "WHERE c.channel=%s", (start, start, kind))
+    result = report_queries.channel_metrics(start, kind)
     return dict(completed=result["completed"], waiting=int(result["waiting"] or 0), longest=duration(result["longest"] or 0),
                 asa=duration(result["asa"]) if result["asa"] is not None else "—")
 
 
 def case_status_breakdown():
     # 전체 티켓을 종결·대기·진행 중 하나로만 분류한다. 상태별 건수와 비율을 상담원 대시보드에 보낸다.
-    counts = rows(
-        "SELECT CASE WHEN closed_at IS NOT NULL THEN 'closed' WHEN current_agent_id IS NULL THEN 'queued' "
-        "ELSE 'active' END AS state, COUNT(*) AS n FROM visible_case GROUP BY state"
-    )
+    counts = report_queries.case_status_counts()
     return pie({"queued": "대기", "active": "진행 중", "closed": "종결"},
                ("#d29a48", "#50a9b5", "#68869a"), {row["state"]: row["n"] for row in counts})
 
 
-def notices(latest=False):
-    # 최근 공지가 먼저 오도록 정렬한다. 데스크 요약은 한 건만, 공지 탭은 전체 목록을 사용한다.
-    return rows("SELECT n.notice_id,n.title,n.body,n.published_at,COALESCE(a.display_name,a.login_id) AS author "
-                "FROM staff_notice n JOIN staff_account a ON a.staff_id=n.author_id ORDER BY published_at DESC,notice_id DESC"
-                + (" LIMIT 1" if latest else ""))
-
-
 def statistics(dates, *, staff_id=None, team_id=None, own_team=False):
-    # 선택 기간에 종결된 티켓을 날짜·문의 유형·결과별로 묶는다. 통화 시간 보기는 전화 티켓만
-    # 날짜별로 집계한다. 쿼리의 by 값은 아래 사전을 거쳐 정해진 SQL 열로만 바뀐다.
+    # 통화 시간 보기는 기간 내 종결된 전화 티켓을 날짜별로 집계한다.
     breakdown = request.args.get("by", "activity")
-    columns = {"activity": "DATE(c.closed_at + INTERVAL 9 HOUR)", "topics": "c.inquiry_type",
-               "outcomes": "c.outcome", "duration": "DATE(c.closed_at + INTERVAL 9 HOUR)"}
-    if breakdown not in columns:
+    if breakdown not in report_queries.STATISTIC_COLUMNS:
         raise ApiError("INVALID_INPUT")
-    scope = "c.current_agent_id=%s"
-    # 상담원 개인 화면은 본인 담당 건, 팀 보기는 해당 직원의 현재 소속 팀,
-    # 관리자 조직 화면은 관리자가 선택한 팀 ID로 조회 범위를 정한다.
-    if own_team:
-        scope = "a.team_id=(SELECT team_id FROM staff_account WHERE staff_id=%s)"
-    elif team_id:
-        scope = "a.team_id=%s"
     voice = breakdown == "duration"
-    records = rows(
-        f"SELECT {columns[breakdown]} AS bucket, COUNT(*) AS n, SUM(c.channel='WEB') AS chats, SUM(c.channel='PHONE') AS calls, "
-        "SUM(IF(c.call_direction='INBOUND',c.talk_seconds,NULL)) AS inbound, "
-        "SUM(IF(c.call_direction='OUTBOUND',c.talk_seconds,NULL)) AS outbound, SUM(c.talk_seconds) AS seconds, "
-        "COUNT(c.talk_seconds) AS timed FROM visible_case c JOIN staff_account a ON a.staff_id=c.current_agent_id "
-        f"WHERE c.closed_at>=%s AND c.closed_at<%s AND {scope} " + ("AND c.channel='PHONE' " if voice else "") +
-        "GROUP BY bucket ORDER BY " + ("bucket DESC" if breakdown in ("activity", "duration") else "n DESC,bucket"),
-        (midnight(dates["start"]), midnight(dates["end"] + timedelta(days=1)), team_id or staff_id))
+    records = report_queries.statistics(
+        breakdown, midnight(dates["start"]), midnight(dates["end"] + timedelta(days=1)),
+        staff_id=staff_id, team_id=team_id, own_team=own_team,
+    )
+
     def cells(row):
         # 통화 표에는 방향별 시간과 길이를 입력한 건수/전체 건수를, 그 외 표에는 채널별 건수를 표시한다.
         if voice:
@@ -184,13 +150,9 @@ def statistics(dates, *, staff_id=None, team_id=None, own_team=False):
 def call_history(staff_id, dates):
     # 담당 전화 티켓을 기준으로 통화 이력을 만든다. 통화 일시가 비어 있으면 접수 시각으로 기간을 판단한다.
     # LEFT JOIN을 써서 재생할 녹취가 없는 티켓도 남기고, 녹취가 여러 개인 티켓은 아래에서 다시 묶는다.
-    records = rows("SELECT c.case_id,c.inquiry_type,c.call_direction,c.talk_seconds,c.closed_at, "
-                   "COALESCE(p.call_at,c.opened_at) AS call_time, r.recording_id,r.label "
-                   "FROM visible_case c LEFT JOIN phone_response p USING(case_id) LEFT JOIN recording r "
-                   "ON r.case_id=c.case_id AND r.state='READY' AND r.expires_at>UTC_TIMESTAMP(6) "
-                   "WHERE c.channel='PHONE' AND c.current_agent_id=%s AND COALESCE(p.call_at,c.opened_at)>=%s "
-                   "AND COALESCE(p.call_at,c.opened_at)<%s ORDER BY call_time DESC,c.case_id,r.stored_at DESC",
-                   (staff_id, midnight(dates["start"]), midnight(dates["end"] + timedelta(days=1))))
+    records = report_queries.call_history(
+        staff_id, midnight(dates["start"]), midnight(dates["end"] + timedelta(days=1)),
+    )
     history = {}
     for row in records:
         case = history.setdefault(row["case_id"], {**row, "clips": []})

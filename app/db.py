@@ -1,10 +1,13 @@
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import pymysql
 from flask import g
 from pymysql.cursors import DictCursor
+
+SQL_DIR = Path(__file__).resolve().parent.parent / "mysql"
 
 
 def db():
@@ -71,18 +74,17 @@ def stamp(value):
     return value.isoformat(timespec="microseconds") + "Z" if value else None
 
 
+def check_connection():
+    one("SELECT 1 AS ok")
+
+
 def audit(action, actor, case_id=None, recording_id=None, result="OK"):
-    # 조회·재생·정리 같은 이벤트의 주체와 결과를 기록한다. 대상이 있는 경우에만 연관 ID를 남긴다.
-    run(
-        "INSERT INTO audit_event (action, actor, case_id, recording_id, result) "
-        "VALUES (%s, %s, %s, %s, %s)",
-        (action, actor, case_id, recording_id, result),
-    )
+    from .queries.reports import add_audit_event
+
+    add_audit_event(action, actor, case_id, recording_id, result)
 
 
 def admin_change(action, target, case_id=None):
-    # 관리자 화면의 변경 이력에 업무명과 대상 설명을 남긴다. 작업자 ID는 인증 단계에서 g.actor에 담긴다.
-    run(
-        "INSERT INTO admin_change (actor_id, action, target, case_id) VALUES (%s,%s,%s,%s)",
-        (g.actor, action, target, case_id),
-    )
+    from .queries.staff import add_admin_change
+
+    add_admin_change(g.actor, action, target, case_id)
