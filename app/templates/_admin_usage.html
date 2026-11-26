@@ -1,0 +1,45 @@
+{% set series = [('uncached','입력 (캐시 미적중)'),('cached','캐시 적중'),('output','출력')] %}
+{% set scope = 'AI 채팅' if usage.channel=='CHAT' else 'AI 통화 · 녹취 요약' if usage.channel=='VOICE' else 'AI 채팅 + AI 통화' %}
+{% macro axis(n) -%}
+  {{- ('%.1fM'|format(n/1000000)) if n>=1000000 else ('%.1fK'|format(n/1000)) if n>=1000 else n -}}
+{%- endmacro %}
+<section id="token-usage" class="board-panel admin-panel token-usage" aria-labelledby="token-title" data-period="{{ usage.period }}">
+  <div class="section-title"><h3 id="token-title">{{ staff_icon('chart') }}LLM 토큰 사용량</h3><small>{{ scope }}</small>
+    <nav class="switches" aria-label="토큰 집계 기간">{% for key,label in usage.periods.items() %}
+      <a href="{{ url_for('management.index',tab=tab,usage_period=key,_anchor='token-usage',**usage_query) }}" {% if key==usage.period %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}</nav>
+  </div>
+  <div class="usage-grid">
+    <div class="usage-summary">
+      <small>합계 (입력 + 출력)</small>
+      <div class="usage-total"><strong data-tokens="total">{{ '{:,}'.format(usage.total) }}</strong> 토큰</div>
+      <small>모델 응답 {{ '{:,}'.format(usage.responses) }}건</small>
+      <dl>{% for field,label in series %}
+        <div><dt>{{ label }}</dt><dd data-tokens="{{ field }}">{{ '{:,}'.format(usage[field]) }}</dd>
+          <meter class="usage-{{ field }}" aria-label="{{ label }} 비중" min="0" max="{{ usage.total or 1 }}" value="{{ usage[field] }}"></meter></div>
+      {% endfor %}<div class="usage-rate"><dt>캐시 적중률</dt><dd>{{ '%g%%'|format(usage.hit_rate) if usage.hit_rate is not none else '—' }}</dd></div></dl>
+    </div>
+    <div class="usage-plot">
+      <div class="usage-caption"><span class="usage-legend">{% for field,label in series %}<span class="usage-{{ field }}">{{ label }}</span>{% endfor %}</span>
+        <small>{{ usage.start }} ~ {{ usage.end }} · 한국 시간</small></div>
+      {% if usage.responses %}
+      <div class="usage-chart"><svg viewBox="0 0 820 160" role="img" aria-label="{{ scope }} 기간별 누적 막대그래프, 총 {{ '{:,}'.format(usage.total) }}토큰">
+        {% for n in ([0,usage.peak//2,usage.peak] if usage.peak>1 else [0,usage.peak]) %}
+          {% set y=131-n*116/usage.peak %}<line x1="55" x2="813" y1="{{ y }}" y2="{{ y }}"/><text x="50" y="{{ y+4 }}" text-anchor="end">{{ axis(n) }}</text>
+        {% endfor %}
+        {% set step=755/(usage.bars|length) %}
+        {% for bar in usage.bars %}{% set center=56+(loop.index0+0.5)*step %}{% set width=[step*0.64,38]|min %}
+          <g><title>{{ bar.day }}{% if bar.end!=bar.day %} ~ {{ bar.end }}{% endif %} · 입력(미적중) {{ '{:,}'.format(bar.uncached) }} · 캐시 {{ '{:,}'.format(bar.cached) }} · 출력 {{ '{:,}'.format(bar.output) }}</title>
+          <rect x="{{ center-step/2 }}" y="10" width="{{ step }}" height="126" fill="transparent"/>
+          {% set pos=namespace(y=131) %}{% for field,label in series %}{% set h=bar[field]*116/usage.peak %}{% set pos.y=pos.y-h %}
+            {% if h %}<rect class="usage-{{ field }}" x="{{ center-width/2 }}" y="{{ pos.y }}" width="{{ width }}" height="{{ h }}"/>{% endif %}
+          {% endfor %}</g>
+          {% if loop.first or loop.last or (loop.index0%(3 if usage.bars|length>19 else 2 if usage.bars|length>10 else 1)==0 and loop.revindex>2) %}
+            <text x="{{ center }}" y="151" text-anchor="middle">{{ bar.day.strftime('%y.%m' if usage.period in ('6m','1y') else '%m.%d') }}</text>
+          {% endif %}
+        {% endfor %}
+      </svg></div>
+      {% else %}<p class="usage-empty">이 기간에 수집된 토큰 사용량이 없습니다.</p>{% endif %}
+    </div>
+  </div>
+</section>

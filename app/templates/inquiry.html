@@ -47,6 +47,7 @@
     <audio id="voice-ringback" src="{{ url_for('voice.ringback') }}" preload="none" loop hidden></audio>
     <audio id="voice-audio" autoplay controls hidden aria-label="AI 답변 재생"></audio>
     <button class="help-button" id="voice-start" type="button"{% if not voice_enabled %} disabled{% endif %}>음성 상담 시작</button>
+    <button class="help-button" id="voice-resolved" type="button" title="해결로 기록하고 통화 종료" hidden>해결됐어요</button>
     <button class="voice-open" id="voice-stop" type="button" hidden>음성 상담 종료</button>
   </div>
 </dialog>

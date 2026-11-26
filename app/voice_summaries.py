@@ -2,7 +2,6 @@
 import base64
 import io
 import json
-import os
 import re
 import time
 import wave
@@ -10,7 +9,9 @@ from http.client import HTTPException
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from . import recording_store
+from . import openai_settings, recording_store
+from .ai_usage import record_usage
+from .common import ApiError
 from .db import db
 from .queries import voice as voice_queries
 from .queries.voice import list_calls as call_list
@@ -48,7 +49,7 @@ def request_line(text):
     return NO_REQUEST
 
 
-def audio_summary(wav_bytes, previous, key):
+def audio_summary(wav_bytes, previous, key, model):
     # 현재 구간의 WAV를 JSON으로 보낼 수 있게 Base64로 인코딩한다. 두 번째 구간부터는
     # 직전 요약도 메시지에 넣어 이번 구간까지의 누적 요약을 텍스트로 받는다.
     content = [{"type": "text", "text": "이번 통화 구간까지 요약하세요."},
@@ -58,12 +59,14 @@ def audio_summary(wav_bytes, previous, key):
         messages.append({"role": "assistant", "content": previous})
     messages.append({"role": "user", "content": content})
     request = Request("https://api.openai.com/v1/chat/completions", headers={"Content-Type": "application/json"},
-                      data=json.dumps({"model": os.getenv("OPENAI_CALL_SUMMARY_MODEL") or "gpt-audio-1.5",
+                      data=json.dumps({"model": model,
                                        "modalities": ["text"], "messages": messages, "store": False,
                                        "max_completion_tokens": 160}).encode())
     request.add_unredirected_header("Authorization", "Bearer " + key)
     with urlopen(request, timeout=60) as response:
-        choice = json.load(response)["choices"][0]
+        completion = json.load(response)
+    record_usage("VOICE", completion)
+    choice = completion["choices"][0]
     # 모델이 정상 종료했고 공백 이외의 텍스트가 있을 때만 이번 구간의 요약으로 채택한다.
     result = choice["message"]["content"]
     if choice["finish_reason"] != "stop" or not isinstance(result, str) or not result.strip():
@@ -72,7 +75,7 @@ def audio_summary(wav_bytes, previous, key):
     return previous if previous and line == NO_REQUEST else line
 
 
-def summarize_recording(job, key):
+def summarize_recording(job, key, model):
     # 원본을 한 번에 메모리에 올리지 않고 WAV 프레임 단위로 읽는다. 구간마다 앞선 요약을 갱신해
     # 모든 프레임을 처리하면 통화 전체의 요약 하나를 반환한다.
     summary = ""
@@ -97,7 +100,7 @@ def summarize_recording(job, key):
             if not voice_queries.available_for_summary(job["recording_id"]):
                 return None
             db().commit()
-            summary = audio_summary(chunk.getvalue(), summary, key)
+            summary = audio_summary(chunk.getvalue(), summary, key, model)
             remaining -= frames
     return summary
 
@@ -117,19 +120,21 @@ def process_next_summary():
         db().commit()
         summary = None
         error = None
-        key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not key:
-            error = "서버에 OpenAI API 키를 설정한 뒤 다시 시도하세요."
-        else:
-            try:
-                summary = summarize_recording(job, key)
-            except HTTPError as exc:
-                exc.close()
-                error = {401: "요약 API 키를 확인하세요.", 403: "요약 모델 접근 권한을 확인하세요.",
-                         404: "요약 모델 이름과 접근 권한을 확인하세요.", 429: "요약 API 사용 한도를 확인하세요."}.get(
-                             exc.code, "요약 서비스 연결에 실패했습니다.")
-            except (OSError, HTTPException, ValueError, KeyError, IndexError, TypeError, wave.Error, EOFError):
-                error = "녹취 파일 또는 요약 서비스 응답을 확인하세요."
+        try:
+            key, model = openai_settings.connection("summary_model")
+            if key:
+                summary = summarize_recording(job, key, model)
+            else:
+                error = "AI 설정에서 OpenAI API 키를 등록한 뒤 다시 시도하세요."
+        except ApiError as exc:
+            error = exc.message
+        except HTTPError as exc:
+            exc.close()
+            error = {401: "요약 API 키를 확인하세요.", 403: "요약 모델 접근 권한을 확인하세요.",
+                     404: "요약 모델 이름과 접근 권한을 확인하세요.", 429: "요약 API 사용 한도를 확인하세요."}.get(
+                         exc.code, "요약 서비스 연결에 실패했습니다.")
+        except (OSError, HTTPException, ValueError, KeyError, IndexError, TypeError, wave.Error, EOFError):
+            error = "녹취 파일 또는 요약 서비스 응답을 확인하세요."
         if summary or error:
             # 외부 응답을 기다리는 사이 삭제된 녹취에는 결과를 남기지 않는다.
             voice_queries.finish_summary(rid, "FAILED" if error else "READY", summary, error)

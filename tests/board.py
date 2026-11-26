@@ -2,7 +2,11 @@
 import os
 from uuid import uuid4
 
+from werkzeug.security import generate_password_hash
+
 from app import app
+from app.db import db
+from app.queries.staff import seed_account
 
 
 def uid():
@@ -18,10 +22,20 @@ login(admin, "admin", os.environ["DEMO_ADMIN_PASSWORD"])
 login(agent, "test", "test")
 notice = "교대 공지 " + uid()
 assert admin.post("/admin/notices", json={"notice_id": uid(), "title": notice, "body": "공지 본문"}).status_code == 201
-assert notice in agent.get("/portal?tab=dashboard").get_data(as_text=True)
-assert notice in agent.get("/portal?tab=notices").get_data(as_text=True)
+dashboard = agent.get("/portal?tab=dashboard").get_data(as_text=True)
+assert notice in dashboard and '?tab=board#board-notices' in dashboard
+for client, path in ((agent, "/portal"), (admin, "/admin")):
+    previous = client.get(path + "?tab=notices")
+    assert previous.status_code == 302 and previous.location == path + "?tab=board#board-notices"
+    combined = client.get(previous.location)
+    assert combined.status_code == 200
+    html = combined.get_data(as_text=True)
+    assert html.index('id="board-notices"') < html.index(notice) < html.index('id="board-posts"')
+    assert html.count(notice) == 1 and '?tab=notices' not in html
+    assert ('action="/admin/notices"' in html) == (client is admin)
+    assert '글쓰기</a>' in html
 assert notice in agent.get("/portal/updates?tab=dashboard").json["notice_html"]
-for tab in ("calls", "chats", "desk", "closed&channel=PHONE", "closed&channel=WEB", "stats", "recordings", "board"):
+for tab in ("calls", "chats", "desk", "closed&channel=PHONE", "closed&channel=WEB", "stats", "recordings", "board&write=1"):
     page = agent.get("/portal?tab=" + tab)
     assert page.status_code == 200
     assert notice not in page.get_data(as_text=True) and b'id="live-notices"' not in page.data
@@ -35,14 +49,21 @@ for closed in (False, True):
         assert agent.post(f"/staff/cases/{ticket}/close", json={"result_note": "검증 완료"}).status_code == 200
     detail = agent.get("/portal/" + ticket)
     assert detail.status_code == 200 and b'id="live-notices"' not in detail.data
-print("PASS notices only on the staff dashboard and notices tab, including selected and closed cases")
+print("PASS dashboard notices and combined board for both roles, including legacy links and notice publishing controls")
 
 root = "/staff/board/posts"
 assert guest.get("/portal?tab=board").status_code == 302
 assert guest.post(root, json={}).status_code == 401
-for author, author_tab, reader, reader_tab in (
-    (agent, "/portal?tab=board", admin, "/admin?tab=board"),
-    (admin, "/admin?tab=board", agent, "/portal?tab=board"),
+other_admin, other_agent = app.test_client(), app.test_client()
+admin_name, password = uid(), uid()
+with app.app_context():
+    seed_account(uid(), admin_name, generate_password_hash(password), "ADMIN")
+    db().commit()
+login(other_admin, admin_name, password)
+login(other_agent, "agent2", os.environ["DEMO_AGENT2_PASSWORD"])
+for author, author_tab, reader, reader_tab, peer in (
+    (agent, "/portal?tab=board", admin, "/admin?tab=board", other_agent),
+    (admin, "/admin?tab=board", agent, "/portal?tab=board", other_admin),
 ):
     rid = uid()
     values = {"post_id": rid, "title": "업무 공유 " + rid, "body": "<b>테스트</b>\n다음 줄"}
@@ -54,14 +75,19 @@ for author, author_tab, reader, reader_tab in (
     assert values["title"] in reader.get(reader_tab).get_data(as_text=True)
     author_page = author.get(created.json["location"]).get_data(as_text=True)
     reader_page = reader.get(reader_tab + "&post=" + rid).get_data(as_text=True)
-    assert 'value="delete"' in author_page and 'value="delete"' not in reader_page
+    assert notice not in author_page and notice not in reader_page
+    assert 'value="delete"' in author_page
+    assert ('value="delete"' in reader_page) == (reader is admin)
+    assert '>수정</a>' not in reader_page
+    assert 'value="delete"' not in peer.get(author_tab + "&post=" + rid).get_data(as_text=True)
     assert "&lt;b&gt;테스트&lt;/b&gt;" in reader_page
     assert reader.get(reader_tab + "&post=" + rid + "&write=1").status_code == 403
     path = root + "/" + rid
     edit = {"operation": "edit", "revision": 1, "title": values["title"], "body": "수정한 내용"}
     delete = {"operation": "delete", "revision": 2}
     assert reader.post(path, json=edit).status_code == 403
-    assert reader.post(path, json=delete).status_code == 403
+    assert reader.post(path, json=delete).status_code == (409 if reader is admin else 403)
+    assert peer.post(path, json={"operation": "delete", "revision": 1}).status_code == 403
     assert author.post(path, json=edit).status_code == 200
     assert author.post(path, json=edit).status_code == 200
     assert author.post(path, json={**edit, "body": "이전 화면"}).status_code == 409
@@ -71,4 +97,10 @@ for author, author_tab, reader, reader_tab in (
     assert author.post(root, json=values).status_code == 409
     assert reader.get(reader_tab + "&post=" + rid).status_code == 404
     assert values["title"] not in reader.get(reader_tab).get_data(as_text=True)
-print("PASS shared staff board, escaped content, author-only edits and deletion, safe retries and stale edits")
+
+rid = uid()
+assert agent.post(root, json={"post_id": rid, "title": "삭제 검증", "body": "상담원 글"}).status_code == 201
+assert admin.post(root + "/" + rid, json={"operation": "delete", "revision": 1}).status_code == 200
+assert agent.get("/portal?tab=board&post=" + rid).status_code == 404
+assert rid not in admin.get("/admin?tab=board").get_data(as_text=True)
+print("PASS shared board, author-only edits, admin deletion of agent posts, peer restrictions and safe retries")

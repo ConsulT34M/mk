@@ -96,21 +96,44 @@ def quota_progress(starts, staff_id=None):
         + ("AND a.staff_id=%s " if staff_id else "") + "ORDER BY a.is_active DESC, a.login_id",
         (staff_id,) if staff_id else (),
     )
+    return _quota_counts(people, starts, staff_id=staff_id)
+
+
+def team_quota(team_id, starts=None):
+    # 기간별로 직접 설정한 값이 없으면 현재 소속 상담원들의 목표를 합산한다.
+    team = one(
+        "SELECT t.team_id,t.name,COALESCE(t.daily,SUM(q.daily),0) AS daily, "
+        "COALESCE(t.weekly,SUM(q.weekly),0) AS weekly,COALESCE(t.monthly,SUM(q.monthly),0) AS monthly "
+        "FROM staff_team t LEFT JOIN staff_account a ON a.team_id=t.team_id AND a.role='AGENT' "
+        "LEFT JOIN agent_quota q ON q.staff_id=a.staff_id WHERE t.team_id=%s GROUP BY t.team_id", (team_id,),
+    )
+    if team and starts is not None:
+        _quota_counts([team], starts, team_id=team_id)
+    return team
+
+
+def _quota_counts(subjects, starts, *, staff_id=None, team_id=None):
+    selected = team_id or staff_id
+    key_field = "team_id" if team_id else "staff_id"
     for table, owner, at, metric in (
         ("assignment_history JOIN visible_case USING (case_id)", "new_agent_id", "changed_at", "assigned"),
         ("visible_case", "current_agent_id", "closed_at", "completed"),
     ):
         # 같은 상담은 한 번만 세며, 배정은 새 담당자, 종결은 현재 담당자 기준이다.
+        if team_id:
+            table += f" JOIN staff_account member ON member.staff_id={owner} AND member.role='AGENT'"
+            owner = "member.team_id"
         counts = ", ".join(f"COUNT(DISTINCT IF({at}>=%s, case_id, NULL)) AS {key}" for key, _ in PERIODS)
         records = rows(
-            f"SELECT {owner} AS staff_id, {counts} FROM {table} WHERE {at}>=%s "
-            + (f"AND {owner}=%s " if staff_id else "") + f"GROUP BY {owner}",
-            (*starts, min(starts), *((staff_id,) if staff_id else ())),
+            f"SELECT {owner} AS scope_id, {counts} FROM {table} WHERE {at}>=%s "
+            + (f"AND {owner}=%s " if selected else "") + f"GROUP BY {owner}",
+            (*starts, min(starts), *((selected,) if selected else ())),
         )
-        by_staff = {row["staff_id"]: row for row in records}
-        for person in people:
-            person[metric] = {key: by_staff.get(person["staff_id"], {}).get(key, 0) for key, _ in PERIODS}
-    return people
+        totals = {row["scope_id"]: row for row in records}
+        for subject in subjects:
+            counts_for_subject = totals.get(subject[key_field], {})
+            subject[metric] = {key: counts_for_subject.get(key, 0) for key, _ in PERIODS}
+    return subjects
 
 
 def add_audit_event(action, actor, case_id, recording_id, result):

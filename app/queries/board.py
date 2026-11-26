@@ -18,7 +18,7 @@ def list_posts(limit, offset):
 
 def get_post(post_id, lock=False):
     return one(
-        "SELECT p.*,COALESCE(NULLIF(a.display_name,''),a.login_id) AS author FROM staff_board_post p "
+        "SELECT p.*,a.role AS author_role,COALESCE(NULLIF(a.display_name,''),a.login_id) AS author FROM staff_board_post p "
         "JOIN staff_account a ON a.staff_id=p.author_id WHERE p.post_id=%s" + (" FOR UPDATE" if lock else ""),
         (post_id,),
     )

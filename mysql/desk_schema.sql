@@ -3,6 +3,10 @@ CREATE TABLE IF NOT EXISTS staff_team (
     team_id CHAR(36) PRIMARY KEY,
     name VARCHAR(40) NOT NULL UNIQUE
 ) ENGINE=InnoDB;
+ALTER TABLE staff_team ADD COLUMN is_default BOOLEAN UNIQUE;
+ALTER TABLE staff_team ADD COLUMN daily INT UNSIGNED NULL;
+ALTER TABLE staff_team ADD COLUMN weekly INT UNSIGNED NULL;
+ALTER TABLE staff_team ADD COLUMN monthly INT UNSIGNED NULL;
 
 ALTER TABLE staff_account ADD COLUMN display_name VARCHAR(60) NULL;
 ALTER TABLE staff_account ADD COLUMN team_id CHAR(36) NULL,
@@ -48,6 +52,28 @@ ALTER TABLE voice_policy ADD COLUMN greeting VARCHAR(200) NOT NULL DEFAULT '안�
 ALTER TABLE voice_policy ADD COLUMN ringback_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 INSERT IGNORE INTO voice_policy (policy_id) VALUES (1);
 
+-- OpenAI 연결 설정. 모델이 비어 있으면 서버 기본값을 쓴다.
+CREATE TABLE IF NOT EXISTS openai_settings (
+    settings_id TINYINT PRIMARY KEY CHECK (settings_id=1),
+    key_ciphertext VARBINARY(1024),
+    key_suffix CHAR(4) CHARACTER SET ascii,
+    chat_model VARCHAR(160), voice_model VARCHAR(160), summary_model VARCHAR(160),
+    revision INT UNSIGNED NOT NULL DEFAULT 0
+) ENGINE=InnoDB;
+INSERT IGNORE INTO openai_settings (settings_id) VALUES (1);
+
+-- 모델 응답별 토큰 사용량
+CREATE TABLE IF NOT EXISTS ai_token_usage (
+    response_id VARCHAR(180) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+    channel ENUM('CHAT','VOICE') NOT NULL,
+    input_tokens BIGINT UNSIGNED NOT NULL,
+    cached_tokens BIGINT UNSIGNED NOT NULL,
+    output_tokens BIGINT UNSIGNED NOT NULL,
+    used_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    CHECK (cached_tokens <= input_tokens),
+    INDEX (used_at), INDEX (channel, used_at)
+) ENGINE=InnoDB;
+
 -- RKX AI 채팅 설정과 대화 내역
 CREATE TABLE IF NOT EXISTS ai_chat_policy (
     policy_id TINYINT PRIMARY KEY,
@@ -75,6 +101,18 @@ CREATE TABLE IF NOT EXISTS ai_chat_turn (
     FOREIGN KEY (chat_id) REFERENCES ai_chat_session(chat_id) ON DELETE CASCADE,
     UNIQUE (chat_id, request_id), INDEX (chat_id, turn_id)
 ) ENGINE=InnoDB;
+
+-- 고객이 확인한 해결 또는 실제 상담원 접수만 한 번 기록한다.
+CREATE TABLE IF NOT EXISTS ai_consultation_outcome (
+    channel ENUM('WEB','PHONE') NOT NULL,
+    session_id CHAR(36) NOT NULL,
+    outcome ENUM('RESOLVED','HANDOFF') NOT NULL,
+    case_id CHAR(36),
+    PRIMARY KEY (channel,session_id),
+    FOREIGN KEY (case_id) REFERENCES support_case(case_id) ON DELETE SET NULL
+) ENGINE=InnoDB;
+CREATE INDEX idx_ai_turn_start ON ai_chat_turn (created_at, chat_id, turn_id);
+CREATE INDEX idx_ai_voice_start ON audit_event (action, created_at, recording_id);
 
 -- 녹취 동의와 별도로 RKX 전화 상담의 연결 상태만 기록한다.
 CREATE TABLE IF NOT EXISTS rkx_voice_call (

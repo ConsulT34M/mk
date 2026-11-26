@@ -2,14 +2,16 @@
 <form class="report-filter dashboard-filter" method="get">
   <input type="hidden" name="tab" value="overview"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="{{ unit }}" value="{{ month if unit=='month' else day }}">
   <label>접수 채널 <select name="channel"><option value="">전체 채널</option>{% for key,label in [('PHONE','통화'),('WEB','채팅')] %}<option value="{{ key }}" {% if selected==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-  <label>목록 상태 <select name="status"><option value="ALL">전체 상태</option>{% for key,label in states.items() %}<option value="{{ key }}" {% if status_filter==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <input type="hidden" name="usage_period" value="{{ usage.period }}">
+  <input type="hidden" name="ai_view" value="{{ ai_view }}">
   <button class="admin-primary">조회</button><small>누적 상담 기준 · 한국 시간</small>
 </form>
 <div class="channel-kpis overview-kpis" aria-label="누적 상담 현황">
   {% for key,label in [('ALL','전체 상담'),('QUEUED','배정 대기'),('IN_PROGRESS','진행 중'),('CLOSED','종결')] %}
-  <a class="metric metric-{{ key|lower }}" href="{{ url_for('management.index',tab='overview',channel=selected or '',status=key,unit=unit,day=day,month=month,_anchor='tickets') }}">
-    <span class="metric-name">{{ label }}</span><span class="metric-body"><strong>{{ channel_count if key=='ALL' else counts[key] }}</strong>건 <small>통화 {{ breakdown[(key,'PHONE')] }} · 채팅 {{ breakdown[(key,'WEB')] }}</small></span>
-  </a>{% endfor %}
+  <div class="metric metric-{{ key|lower }}">
+    <span class="metric-name">{{ label }}</span><span class="metric-body"><strong>{{ channel_count if key=='ALL' else counts[key] }}</strong>건 <small>
+    {% for code,channel_tab,name in [('PHONE','calls','통화'),('WEB','chats','채팅')] if not selected or selected==code %}{{ ' · ' if not loop.first }}<a href="{{ url_for('management.index',tab=channel_tab,status=key,_anchor='tickets') }}">{{ name }} {{ breakdown[(key,code)] }}</a>{% endfor %}</small></span>
+  </div>{% endfor %}
 </div>
 <div class="board-metrics ops-charts">
   <section class="board-panel">
@@ -27,10 +29,27 @@
       </g>{% endfor %}
     </svg>
   </section>
+  <section class="board-panel" id="ai-outcomes" aria-labelledby="ai-outcomes-title">
+    <div class="section-title"><h3 id="ai-outcomes-title">{{ staff_icon('pie') }}AI 상담 현황</h3></div>
+    <div class="ai-chart-tools">
+      <nav class="switches" aria-label="AI 상담 지표">{% for key,label in [('resolution','AI 자동 해결률'),('handoff','상담원 전환 현황')] %}
+        <a href="{{ url_for('management.index',ai_view=key,unit=unit,day=day,month=month,channel=selected or '',usage_period=usage.period,_anchor='ai-outcomes') }}" {% if ai_view==key %}aria-current="page"{% endif %}>{{ label }}</a>
+      {% endfor %}</nav>
+      <a href="#distribution-period" title="두 분포의 조회 기간 변경">{{ month if unit=='month' else day }}</a>
+    </div>
+    {% if ai_view=='resolution' %}
+      {% set rate = '%g%%'|format(ai_chart.slices[0].percent|round(1)) if ai_chart.total else '—' %}
+      {{ pie(ai_chart, true, '확인된 결과', rate) }}
+      <p class="table-note">결과 미확인 {{ ai_unknown }}건 · 해결률 계산에서 제외</p>
+    {% else %}
+      {{ pie(ai_chart, true, '전환 채널') }}
+      <p class="table-note">상담원에게 접수된 AI 상담 기준</p>
+    {% endif %}
+  </section>
   <section class="board-panel"><div class="section-title"><h3>{{ staff_icon('pie') }}문의 유형 분포</h3><nav class="switches" aria-label="문의 유형 집계 단위">
-    {% for key,label in [('day','일별'),('month','월별')] %}<a href="{{ url_for('management.index',unit=key,day=day,month=month,status=status_filter,channel=selected or '') }}" {% if unit==key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav></div>
-    <form class="report-filter pie-filter" method="get"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="status" value="{{ status_filter }}"><input type="hidden" name="channel" value="{{ selected or '' }}">
-      <input aria-label="문의 유형 조회 기간" type="{{ 'month' if unit=='month' else 'date' }}" name="{{ unit }}" value="{{ month if unit=='month' else day }}" max="{{ today.isoformat()[:7] if unit=='month' else today }}" required><button class="admin-btn">조회</button></form>
+    {% for key,label in [('day','일별'),('month','월별')] %}<a href="{{ url_for('management.index',unit=key,day=day,month=month,ai_view=ai_view,usage_period=usage.period,channel=selected or '') }}" {% if unit==key %}aria-current="page"{% endif %}>{{ label }}</a>{% endfor %}</nav></div>
+    <form class="report-filter pie-filter" method="get"><input type="hidden" name="unit" value="{{ unit }}"><input type="hidden" name="usage_period" value="{{ usage.period }}"><input type="hidden" name="channel" value="{{ selected or '' }}">
+      <input type="hidden" name="ai_view" value="{{ ai_view }}"><input id="distribution-period" aria-label="AI 상담 현황과 문의 유형 조회 기간" type="{{ 'month' if unit=='month' else 'date' }}" name="{{ unit }}" value="{{ month if unit=='month' else day }}" max="{{ today.isoformat()[:7] if unit=='month' else today }}" required><button class="admin-btn">조회</button></form>
     {{ pie(topics) }}
   </section>
 </div>

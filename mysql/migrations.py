@@ -57,13 +57,16 @@ def init_admin():
 
 def migrate_desk():
     """Apply the additive portal migration, including after a partial DDL run."""
-    from app.db import SQL_DIR, db, rows, run
+    from app.db import SQL_DIR, db, new_id, one, rows, run
 
     # MySQL의 스키마 변경은 중간까지 적용된 채 끝날 수 있다. 현재 열 목록을 읽고
     # desk_schema.sql의 ADD COLUMN 중 이미 적용한 항목을 건너뛰어 재실행할 수 있게 한다.
     columns = {(row["tbl"], row["col"]) for row in rows(
         "SELECT table_name AS tbl,column_name AS col FROM information_schema.columns "
-        "WHERE table_schema=DATABASE() AND table_name IN ('staff_account','support_case','voice_policy')")}
+        "WHERE table_schema=DATABASE() AND table_name IN ('staff_account','staff_team','support_case','voice_policy')")}
+    indexes = {(row["tbl"], row["idx"]) for row in rows(
+        "SELECT DISTINCT table_name AS tbl,index_name AS idx FROM information_schema.statistics "
+        "WHERE table_schema=DATABASE() AND table_name IN ('ai_chat_turn','audit_event')")}
     for chunk in (SQL_DIR / "desk_schema.sql").read_text(encoding="utf-8").split(";"):
         statement = chunk.strip()
         if not statement:
@@ -72,7 +75,21 @@ def migrate_desk():
             tokens = statement.split()
             if (tokens[2], tokens[5]) in columns:
                 continue
+        if statement.startswith("CREATE INDEX"):
+            tokens = statement.split()
+            if (tokens[4], tokens[2]) in indexes:
+                continue
         run(statement)
+    # 기본 팀 지정과 기존 상담원의 최초 배정을 한 트랜잭션에서 처리한다.
+    if not one("SELECT team_id FROM staff_team WHERE is_default=TRUE"):
+        with db().cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO staff_team (team_id,name,is_default) VALUES (%s,%s,TRUE) "
+                "ON DUPLICATE KEY UPDATE is_default=TRUE", (new_id(), "고객 상담팀"),
+            )
+            if cursor.rowcount:
+                run("UPDATE staff_account a JOIN staff_team t ON t.is_default=TRUE "
+                    "SET a.team_id=t.team_id WHERE a.role='AGENT'")
     db().commit()
 
 

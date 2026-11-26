@@ -1,5 +1,5 @@
 {% extends "staff.html" %}
-{% set titles={'dashboard':'대시보드','calls':'내 상담','chats':'내 상담','desk':'내 상담','closed':'내 종결 상담','notices':'공지사항','stats':'상담 통계','recordings':'통화 내역·녹취'} %}
+{% set titles={'dashboard':'대시보드','calls':'내 상담','chats':'내 상담','desk':'내 상담','closed':'내 종결 상담','stats':'상담 통계','recordings':'통화 내역·녹취'} %}
 {% block title %}{{ titles[tab] }} · 상담원 데스크{% endblock %}
 {% block heading %}{{ titles[tab] }}{% endblock %}
 {% block heading_actions %}<span id="sync-status" class="sync-status" role="status"></span>{% endblock %}
@@ -12,16 +12,16 @@
       <div id="live-chart">{% include "_case_chart.html" %}</div>
     </section>
     <section class="board-panel" aria-labelledby="quota-title">
-      <div class="section-title"><h3 id="quota-title">내 배정량</h3><small>처리 / 목표</small></div>
+      <div class="section-title"><h3 id="quota-title">상담 배정량</h3><small>처리 / 목표</small></div>
       <div class="quota-list" id="live-quota">{% include "_quota_rows.html" %}</div>
     </section>
   </div>
-  <section class="board-panel"><div class="section-title"><h3>최근 공지</h3><a href="{{ url_for('queue_page',tab='notices') }}">전체 보기</a></div><div id="live-notices">{% include '_notices.html' %}</div></section>
+  <section class="board-panel"><div class="section-title"><h3>최근 공지</h3><a href="{{ url_for('queue_page',tab='board',_anchor='board-notices') }}">전체 보기</a></div><div id="live-notices">{% include '_notices.html' %}</div></section>
   <section class="board-panel" aria-labelledby="ticket-title">
     <div class="section-title"><h3 id="ticket-title">대기 상담 요청</h3><span class="count"><span data-total="waiting">{{ tickets|length }}</span>건</span></div>
     <div class="table-scroll" id="live-list">{% include "_tickets.html" %}</div>
   </section>
-{% elif tab in ('notices','stats','recordings') %}
+{% elif tab in ('stats','recordings') %}
   {% include '_agent_operations.html' %}
 {% else %}
   {% if tab!='closed' %}

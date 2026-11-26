@@ -1,5 +1,4 @@
 from collections import Counter
-from datetime import timedelta
 
 from flask import Blueprint, g, redirect, render_template, request, url_for
 from pymysql.err import IntegrityError
@@ -7,11 +6,13 @@ from werkzeug.security import generate_password_hash
 
 from mysql.migrations import init_admin, migrate_desk, migrate_recording_labels
 
+from . import openai_settings
 from .board import board_page
-from .cases import assignment_log, message_info, phone_info, save_phone_response, set_assignee, staff_notes
+from .ai_usage import usage_report
+from .cases import PHONE_RECORD_FIELDS, assignment_log, message_info, phone_info, save_phone_response, set_assignee, staff_notes
 from .common import ApiError, admin, case_info, case_row, channel, content_visible, payload, staff_user, text_field, uuid_field
-from .db import admin_change, new_id, stamp, utcnow
-from .desk_reports import channel_metrics, dashboard_charts, midnight, notices, report_range, statistics, today
+from .db import admin_change, new_id, stamp
+from .desk_reports import OUTCOMES, TOPICS, channel_metrics, dashboard_charts, midnight, quota_starts, report_range, statistics, today
 from .queries import ai_chat
 from .queries import cases as case_queries
 from .queries import chat as chat_queries
@@ -42,12 +43,7 @@ def require_admin():
 
 
 def quota_rows(staff_id=None):
-    # 일간은 오늘, 주간은 이번 주 월요일, 월간은 이달 1일의 한국 자정부터 센다.
-    # DB의 시각이 UTC이므로 기간 경계에서 9시간을 빼고 SQL의 비교값으로 사용한다.
-    kst = timedelta(hours=9)
-    today = (utcnow() + kst).replace(hour=0, minute=0, second=0, microsecond=0)
-    starts = (today - kst, today - timedelta(days=today.weekday()) - kst, today.replace(day=1) - kst)
-    return report_queries.quota_progress(starts, staff_id)
+    return report_queries.quota_progress(quota_starts(), staff_id)
 
 
 def agent_account(staff_id, lock=False):
@@ -76,7 +72,7 @@ def index():
     elif tab == "board":
         return board_page(g.admin_user)
     elif tab == "notices":
-        data.update(notices=notices(), notice_id=new_id())
+        return redirect(url_for("management.index", tab="board", _anchor="board-notices"))
     elif tab == "org":
         # 수정 폼에 현재 직원별 팀 배정표(snapshot)를 전달한다. 저장할 때 이 값과 DB를 비교한다.
         teams = staff_queries.teams()
@@ -87,11 +83,13 @@ def index():
             raise ApiError("INVALID_INPUT")
         dates = report_range()
         data.update(teams=teams, members=members, team=team, dates=dates, snapshot={p["staff_id"]:p["team_id"] for p in members},
+                    team_quota=report_queries.team_quota(selected) if team else None,
                     report=statistics(dates, team_id=selected) if team else None)
     elif tab == "ai":
         # 한국 시간 오늘의 음성 동의·거부 이벤트에서 통화 수를, 같은 접수 키의 티켓에서 인계 수를 센다.
         data["policy"] = voice_queries.policy()
         data["chat_policy"] = ai_chat.policy()
+        data["openai"] = openai_settings.admin_settings()
         data["voice_counts"] = report_queries.voice_counts_since(midnight(today()))
     elif tab == "quotas":
         # 목표 편집 링크는 계정 탭의 동일한 편집 폼으로 연결한다.
@@ -130,29 +128,28 @@ def index():
             kind = request.args.get("channel")
             if tab == "overview":
                 data.update(dashboard_charts(kind))
-                data["team"] = quota_rows()
                 data["in_progress"] = Counter(i["current_agent_id"] for i in items if i["status"] == "IN_PROGRESS")
             else:
                 kind = "PHONE" if tab == "calls" else "WEB"
                 data["metrics"] = channel_metrics(kind)
             scoped = [i for i in items if kind not in ("WEB", "PHONE") or i["channel"] == kind]
             counts = Counter(i["status"] for i in scoped)
+            data.update(team=quota_rows(), counts=counts, channel_count=len(scoped), selected=kind)
             if tab == "overview":
                 breakdown = Counter((i["status"], i["channel"]) for i in scoped)
                 breakdown.update(("ALL", i["channel"]) for i in scoped)
                 data["breakdown"] = breakdown
-            status = request.args.get("status", "ALL")
-            if status not in ("QUEUED", "IN_PROGRESS", "CLOSED"):
-                status = "ALL"
-            tickets = [i for i in scoped if status == "ALL" or i["status"] == status]
-            # 여섯 건씩 페이지를 구성한다. 페이지 링크에는 현재 채널·상태·차트 기간을 유지한다.
-            page_size = 6
-            pages = max(1, (len(tickets) + page_size - 1) // page_size)
-            page = max(1, min(request.args.get("page", 1, type=int), pages))
-            start = (page - 1) * page_size
-            query = {key: request.args[key] for key in ("tab", "channel", "status", "unit", "day", "month") if key in request.args}
-            data.update(items=tickets[start:start + page_size], ticket_count=len(tickets), status_filter=status, counts=counts,
-                        channel_count=len(scoped), selected=kind, page=page, pages=pages, page_query=query)
+            else:
+                status = request.args.get("status", "ALL")
+                if status not in ("QUEUED", "IN_PROGRESS", "CLOSED"):
+                    status = "ALL"
+                tickets = [i for i in scoped if status == "ALL" or i["status"] == status]
+                page_size = 6
+                pages = max(1, (len(tickets) + page_size - 1) // page_size)
+                page = max(1, min(request.args.get("page", 1, type=int), pages))
+                start = (page - 1) * page_size
+                data.update(items=tickets[start:start + page_size], ticket_count=len(tickets), status_filter=status,
+                            page=page, pages=pages, page_query={"tab": tab, "status": status})
         else:
             selected = request.args.get("channel")
             selected = selected if selected in ("WEB", "PHONE", "RECORDINGS") else "ALL"
@@ -171,6 +168,10 @@ def index():
                 if data["note_editor"] is None:
                     return redirect(url_for("management.index", tab="history", channel=selected))
         g.audit_target = ("CASE_LIST", None, None)
+    if tab in ("overview", "ai-calls", "ai-chats"):
+        scope = {"ai-calls": "VOICE", "ai-chats": "CHAT"}.get(tab)
+        data["usage"] = usage_report(request.args.get("usage_period"), scope)
+        data["usage_query"] = {key: request.args[key] for key in ("channel", "unit", "day", "month", "ai_view", "page", "chat", "turn_page") if key in request.args}
     return render_template("admin.html", tab=tab, user=g.admin_user, periods=PERIODS, **data)
 
 
@@ -242,8 +243,8 @@ def save_quota(staff_id):
     return {"staff_id": staff_id}
 
 
-def write_quota(staff_id, login, data):
-    # 세 기간 모두 입력받는다. 빈 값은 목표 미설정(NULL), 숫자 0은 목표 0건이므로 구별해 저장한다.
+def quota_values(data, maximum=99999):
+    # 빈 값은 직접 지정한 목표가 없다는 뜻이고, 숫자 0은 목표 0건이다.
     goals = []
     for key, _ in PERIODS:
         if key not in data:
@@ -251,10 +252,15 @@ def write_quota(staff_id, login, data):
         value = data[key]
         if value is None or value == "":
             goals.append(None)
-        elif str(value).isascii() and str(value).isdecimal() and len(str(value)) <= 5:
+        elif str(value).isascii() and str(value).isdecimal() and len(str(value)) <= len(str(maximum)) and int(value) <= maximum:
             goals.append(int(value))
         else:
             raise ApiError("INVALID_INPUT")
+    return goals
+
+
+def write_quota(staff_id, login, data):
+    goals = quota_values(data)
     previous = staff_queries.quota(staff_id) or {}
     # 직전 목표와 같으면 쓰기와 이력 생성을 생략한다.
     if goals != [previous.get(key) for key, _ in PERIODS]:
@@ -294,11 +300,15 @@ def save_team(team_id):
     if not isinstance(members, list) or not isinstance(previous, dict):
         raise ApiError("INVALID_INPUT")
     chosen = {uuid_field(value) for value in members}
+    goals = quota_values(data, maximum=4294967295) if any(key in data for key, _ in PERIODS) else None
     new = team_id is None
     team_id = team_id or new_id()
     if not new:
         team = staff_queries.lock_team(team_id)
         if not team or team["name"] != data.get("previous_name"):
+            raise ApiError("TEAM_CHANGED")
+        stored_goals = [team[key] for key, _ in PERIODS]
+        if goals is not None and goals != stored_goals and data.get("previous_goals") != stored_goals:
             raise ApiError("TEAM_CHANGED")
     try:
         if new:
@@ -320,8 +330,25 @@ def save_team(team_id):
         if key not in previous or previous[key] != current[key]:
             raise ApiError("TEAM_CHANGED")
         staff_queries.set_team(key, team_id if key in chosen else None)
+    if goals is not None:
+        staff_queries.set_team_quota(team_id, *goals)
     admin_change("팀 생성" if new else "팀 구성 수정", name)
     return {"team_id": team_id}, 201 if new else 200
+
+
+@management.post("/openai-settings/chat-models")
+def openai_chat_models():
+    return {"models": openai_settings.chat_models(payload())}
+
+
+@management.post("/openai-settings")
+def save_openai_settings():
+    data = payload() if request.is_json else request.form
+    openai_settings.save_settings(data)
+    admin_change("OpenAI 설정 변경", "API 키·모델" if data.get("api_key", "").strip() else "상담 모델")
+    if request.is_json:
+        return {"saved": True}
+    return redirect(url_for("management.index", tab="ai", _anchor="openai-settings"), code=303)
 
 
 @management.post("/ai-settings")
@@ -362,7 +389,15 @@ def history(case_id):
     else:
         data["phone"] = phone_info(case_id) if visible else None
         data["recordings"] = recording_queries.case_history(case_id)
-    return render_template("admin.html", tab="history", user=g.admin_user, detail=case_info(case), assignments=assignment_log(case_id),
+    channel_tab = "chats" if case["channel"] == "WEB" else "calls"
+    channel_view = request.args.get("tab") == channel_tab
+    mode = request.args.get("mode", "view" if channel_view else "edit")
+    context = ({"tab": channel_tab, "page": request.args.get("page", type=int), "status": request.args.get("status")}
+               if channel_view else {"channel": request.args.get("channel", case["channel"])})
+    assignee = staff_queries.agent_account(case["current_agent_id"]) if case["current_agent_id"] else None
+    return render_template("admin.html", tab=channel_tab if channel_view else "history", channel_view=channel_view,
+                           editing=mode == "edit", case_query=context, assignee=assignee,
+                           user=g.admin_user, detail=case_info(case), assignments=assignment_log(case_id),
                            visible=visible, notes=staff_notes(case_id) if visible else [], result=case["result_note"] if visible else None, **data)
 
 
@@ -375,6 +410,21 @@ def editable_history(case_id, expected=None):
     if not content_visible(case):
         raise ApiError("CONTENT_EXPIRED")
     return case
+
+
+@management.post("/cases/<uuid:case_id>/category")
+def edit_category(case_id):
+    case = case_row(case_id, lock=True)
+    data = payload()
+    category = data.get("inquiry_type")
+    if not isinstance(category, str) or (category and category not in TOPICS):
+        raise ApiError("INVALID_INPUT")
+    if (category or None) != case["inquiry_type"]:
+        if data.get("previous_category", case["inquiry_type"] or "") != (case["inquiry_type"] or ""):
+            raise ApiError("CASE_CATEGORY_CHANGED")
+        case_queries.set_category(case_id, category or None)
+        admin_change("문의 유형 수정", TOPICS.get(category, "미분류"), case_id)
+    return {"inquiry_type": category or None}
 
 
 @management.post("/notes")
@@ -443,7 +493,11 @@ def edit_history(case_id):
     if data.get("operation") == "delete_ticket":
         return delete_ticket(case_id)
     case = editable_history(case_id)
-    if data.get("operation") == "delete":
+    if data.get("operation") == "delete_phone_response":
+        channel(case, "PHONE")
+        save_phone_response(case_id, dict.fromkeys(PHONE_RECORD_FIELDS), allow_clear=True)
+        admin_change("전화 응대 기록 삭제", "통화 일시·구분·시간 및 응대 내용", case_id)
+    elif data.get("operation") == "delete":
         if case["channel"] == "WEB":
             chat_queries.clear_messages(case_id)
         else:
@@ -454,12 +508,15 @@ def edit_history(case_id):
         admin_change("상담 기록 삭제", "웹채팅" if case["channel"] == "WEB" else "전화 응대 및 녹취", case_id)
     else:
         # 전화 응대는 요청에 들어 있는 필드만 수정하거나 비운다. 결과 메모는 종결된 티켓에서 수정한다.
-        fields = {key: data[key] for key in ("call_at", "inquiry", "guidance", "followup_required") if key in data}
+        fields = {key: data[key] for key in (*PHONE_RECORD_FIELDS, "consent_state") if key in data}
         if fields:
             channel(case, "PHONE")
             save_phone_response(case_id, fields, allow_clear=True)
         if "result_note" in data and case["closed_at"]:
-            case_queries.update_result(case_id, text_field(data["result_note"]))
+            outcome = data.get("outcome", case["outcome"])
+            if outcome is not None and (not isinstance(outcome, str) or (outcome and outcome not in OUTCOMES)):
+                raise ApiError("INVALID_INPUT")
+            case_queries.update_result(case_id, text_field(data["result_note"]), outcome or None)
         elif not fields:
             raise ApiError("INVALID_INPUT")
         admin_change("상담 기록 수정", "웹채팅" if case["channel"] == "WEB" else "전화 응대", case_id)
@@ -488,6 +545,16 @@ def play_voice(recording_id):
     # 직원 업로더가 없는 AI 녹취를 찾는다. 재생 가능 여부는 공통 스트리밍 함수에서 확인한다.
     item = recording_queries.lock_voice_recording(recording_id)
     g.audit_target = ("RECORDING_PLAY", item["case_id"] if item else None, recording_id)
+    if not item:
+        raise ApiError("RECORDING_NOT_FOUND")
+    return stream_recording(item)
+
+
+@management.get("/cases/<uuid:case_id>/recordings/<uuid:recording_id>/content")
+def play_case_recording(case_id, recording_id):
+    g.audit_target = ("RECORDING_PLAY", case_id, recording_id)
+    channel(case_row(case_id, lock=True), "PHONE")
+    item = recording_queries.lock_case_recording(case_id, recording_id)
     if not item:
         raise ApiError("RECORDING_NOT_FOUND")
     return stream_recording(item)

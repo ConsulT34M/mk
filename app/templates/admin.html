@@ -1,5 +1,5 @@
 {% extends "staff.html" %}
-{% set titles = {'overview':'관리자 대시보드','agents':'계정 관리','quotas':'상담 할당량','org':'조직','notices':'공지사항','ai':'AI 설정','calls':'통화','chats':'채팅','history':'상담 기록','ai-calls':'AI 통화','ai-chats':'AI 채팅','audit':'변경 이력'} %}
+{% set titles = {'overview':'관리자 대시보드','agents':'계정 관리','quotas':'상담 할당량','org':'조직','ai':'AI 설정','calls':'통화','chats':'채팅','history':'상담 기록','ai-calls':'AI 통화','ai-chats':'AI 채팅','audit':'변경 이력'} %}
 {% set states = dict(QUEUED='배정 대기', IN_PROGRESS='진행 중', CLOSED='종결') %}
 {% macro state(value) %}<span class="state-pill {{ value|lower }}">{{ states[value] }}</span>{% endmacro %}
 {% macro time_at(iso) %}{% if iso %}<time datetime="{{ iso }}">{{ iso[:16]|replace('T',' ') }}</time>{% else %}—{% endif %}{% endmacro %}
@@ -18,14 +18,21 @@
 {% block title %}{{ titles[tab] }} · 관리자 데스크{% endblock %}
 {% block heading %}{{ ('웹채팅 기록' if detail.channel == 'WEB' else '전화 상담 기록') if detail else '운영 대시보드' if tab=='overview' else titles[tab] }}{% endblock %}
 {% block heading_actions %}
-  {% if tab in ('overview','ai-calls') %}<span id="admin-sync-status" class="sync-status" role="status"></span>
+  {% if tab in ('overview','ai-calls','ai-chats','calls','chats') %}<span id="admin-sync-status" class="sync-status" role="status"></span>{% endif %}
+  {% if detail %}
+    <nav class="switches" aria-label="상담 기록 모드">{% for mode_name,label in [('view','조회'),('edit','수정')] %}
+      <a href="{{ url_for('management.history',case_id=detail.case_id,mode=mode_name,**case_query) }}" {% if editing==(mode_name=='edit') %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}</nav>
+    {% if channel_view %}<a class="admin-btn" href="{{ url_for('management.index',_anchor='tickets',**case_query) }}">접수 목록</a>
+    {% else %}<a class="admin-btn" href="{{ url_for('management.index',tab='history',_anchor='case-history',**case_query) }}">기록 목록</a>{% endif %}
   {% elif tab=='agents' %}<a class="admin-primary" href="{{ url_for('management.index', tab=tab, edit='new') }}">상담원 추가</a>
-  {% elif detail %}{{ state(detail.status) }}<a class="admin-btn" href="{{ url_for('management.index',tab='history',channel=request.args.get('channel',detail.channel),_anchor='case-history') }}">기록 목록</a>
   {% elif tab=='history' and note_editor is none %}<a class="admin-primary" href="{{ url_for('management.index',tab=tab,channel=selected,note='new') }}">기록 추가</a>{% endif %}
 {% endblock %}
 {% block desk_content %}
 {% if detail %}
+  {% if channel_view and tab=='chats' and not editing %}<div id="admin-channel-chat">{% endif %}
   {% include "_admin_history.html" %}
+  {% if channel_view and tab=='chats' and not editing %}</div>{% endif %}
 {% elif tab == 'overview' %}
   <div id="admin-dashboard">{% include "queue.html" %}</div>
 {% elif tab in ('history','calls','chats') %}
@@ -34,9 +41,10 @@
   <div class="channel-links"><a href="{{ url_for('management.index',tab='history',channel=selected) }}">상담 기록 관리</a></div>{% endif %}
   {% if tab=='history' %}{% include "_admin_notes.html" %}{% endif %}
   {% include "queue.html" %}
-{% elif tab in ('org','notices','ai') %}
+{% elif tab in ('org','ai') %}
   {% include "_admin_operations.html" %}
 {% elif tab == 'ai-calls' %}
+  {% include "_admin_usage.html" %}
   <section id="rkx-voice-calls" class="board-panel admin-panel">
     <div class="section-title"><h3>RKX 전화 상담</h3></div>
     <div class="table-scroll"><table class="admin-table"><thead><tr><th>연결 요청</th><th>고객 번호</th><th>통화 연결</th><th>종료</th><th>상태</th></tr></thead><tbody>
@@ -46,7 +54,7 @@
     </tbody></table></div>
   </section>
   <section id="ai-calls" class="board-panel admin-panel">
-    <div class="section-title"><h3>{{ staff_icon('waveform') }}AI 통화 내역</h3><span class="count">{{ clips|length }}건</span><a class="refresh-list" href="{{ url_for('management.index',tab='ai-calls') }}">새로고침</a></div>
+    <div class="section-title"><h3>{{ staff_icon('waveform') }}AI 통화 내역</h3><span class="count">{{ clips|length }}건</span><a class="refresh-list" href="{{ request.full_path.rstrip('?') }}">새로고침</a></div>
     <div class="table-scroll"><table class="admin-table"><thead><tr><th>통화 시작 일시</th><th>저장 일시</th><th>상담 티켓</th><th>녹취 재생</th><th>통화 요약</th><th>관리</th></tr></thead><tbody>
       {% for r in clips %}<tr id="clip-{{ r.recording_id }}">
         <td>{{ time_at(r.call_started_at|utcstamp) }}</td>
@@ -66,7 +74,10 @@
     <p class="table-note">새 녹취는 자동으로 요약합니다. 기존 녹취는 ‘요약 생성’을 누르면 OpenAI에 전송해 요약합니다.</p>
   </section>
 {% elif tab == 'ai-chats' %}
+  <div id="admin-ai-chats">
+  {% include "_admin_usage.html" %}
   {% include "_admin_ai_chats.html" %}
+  </div>
 {% elif tab == 'agents' %}
   {% include "_admin_accounts.html" %}
 {% elif tab == 'quotas' %}

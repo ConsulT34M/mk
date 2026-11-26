@@ -29,20 +29,26 @@
   <div class="section-title"><h3>직원용 상담 기록</h3><span class="count">{{ notes|length }}</span></div>
   {% if notes %}
   <div class="table-scroll"><table class="admin-table"><thead><tr>
-    {% if not detail %}<th>상담 티켓</th>{% endif %}<th>기록 내용</th><th>작성자</th><th>마지막 저장</th><th>관리</th>
+    {% if not detail %}<th>상담 티켓</th>{% endif %}<th>기록 내용</th><th>작성자</th><th>마지막 저장</th>{% if not detail or editing %}<th>관리</th>{% endif %}
   </tr></thead><tbody>
     {% for n in notes %}<tr data-note-id="{{ n.note_id }}">
       {% if not detail %}<td><a class="case-ref" href="{{ url_for('management.history', case_id=n.case_id, _anchor='staff-notes') }}">#{{ n.case_id[:8]|upper }}</a></td>{% endif %}
       <td class="note-text">{{ n.body if detail else n.body|truncate(140, true, '…') }}</td>
       <td>{{ n.login_id }}</td><td>{{ time_at(n.updated_at) }}</td>
-      <td><div class="admin-actions">
-        <a class="admin-btn" href="{{ url_for('management.index', tab='history', channel=note_channel, note=n.note_id) }}">수정</a>
-        <form method="post" action="{{ url_for('management.change_note', case_id=n.case_id, note_id=n.note_id) }}" data-action="admin"
-              data-return="{{ url_for('management.history', case_id=n.case_id) if detail else list_url }}" data-confirm="이 직원용 상담 기록을 삭제할까요?" data-done="직원용 상담 기록을 삭제했습니다.">
+      {% if not detail or editing %}<td><div class="admin-actions">
+        {% set note_url = url_for('management.change_note',case_id=n.case_id,note_id=n.note_id) %}
+        {% if detail %}<details><summary class="admin-btn">수정</summary>
+          <form method="post" class="admin-stack" action="{{ note_url }}" data-action="admin">
+            <input type="hidden" name="updated_at" value="{{ n.updated_at }}">
+            <label>기록 내용<textarea name="body" rows="2" maxlength="4000" required>{{ n.body }}</textarea></label>
+            <button type="submit" class="admin-btn">기록 저장</button>
+          </form>
+        </details>{% else %}<a class="admin-btn" href="{{ url_for('management.index', tab='history', channel=note_channel, note=n.note_id) }}">수정</a>{% endif %}
+        <form method="post" action="{{ note_url }}" data-action="admin" data-confirm="이 직원용 상담 기록을 삭제할까요?" data-done="직원용 상담 기록을 삭제했습니다.">
           <input type="hidden" name="operation" value="delete"><input type="hidden" name="updated_at" value="{{ n.updated_at }}">
           <button type="submit" class="admin-btn danger">삭제</button>
         </form>
-      </div></td>
+      </div></td>{% endif %}
     </tr>{% endfor %}
   </tbody></table></div>
   {% else %}<p class="admin-empty">작성된 직원용 상담 기록이 없습니다.</p>{% endif %}

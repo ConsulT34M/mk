@@ -13,7 +13,8 @@ from flask import Flask, abort, g, jsonify, make_response, redirect, render_temp
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from .admin import PERIODS, init_admin, management, migrate_desk, quota_rows
+from . import openai_settings
+from .admin import init_admin, management, migrate_desk
 from .ai_chat import ai_chat
 from .board import board, board_page
 from .cases import agent_inbox, case_detail, cases as cases_blueprint, intake_case, staff_notes, waiting_tickets
@@ -22,7 +23,7 @@ from .common import (
     payload, staff_user, text_field,
 )
 from .db import audit, check_connection, close_db, db as get_db, new_id, stamp, utcnow
-from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, case_status_breakdown, duration, notices, report_range, statistics
+from .desk_reports import DIRECTIONS, OUTCOMES, TOPICS, call_history, case_status_breakdown, dashboard_quota, duration, notices, report_range, statistics
 from .queries import cases as case_queries
 from .queries import chat as chat_queries
 from .queries import recordings as recording_queries
@@ -126,7 +127,7 @@ def finish(response):
     response.headers["Cache-Control"] = "no-store"
     # 로그인·티켓 폼이 같은 출처로 제출될 때 브라우저가 Origin을 전달할 수 있게 한다.
     form_page = request.endpoint in {"home", "login", "queue_page", "detail_page", "inquiry_page"} and response.mimetype == "text/html"
-    if request.endpoint == "management.index" and request.args.get("tab") == "board":
+    if request.endpoint == "management.index" and request.args.get("tab") in ("board", "ai"):
         form_page = True
     response.headers["Referrer-Policy"] = "same-origin" if form_page else "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -306,22 +307,18 @@ def agent_desk(user, detail=None):
         tab = "closed" if case["status"] == "CLOSED" else channel_tab
     if tab == "board":
         return board_page(user)
-    if tab in ("notices", "stats", "recordings"):
-        # 이 세 탭은 티켓 목록과 별도로 렌더링한다. 통화 이력은 본인 기준이고,
-        # 통계의 팀 범위는 상담원이 실제 팀에 속하며 해당 범위를 선택한 경우에 적용한다.
-        data = {}
-        if tab == "notices":
-            data["notices"] = notices()
+    if tab == "notices":
+        return redirect(url_for("queue_page", tab="board", _anchor="board-notices"))
+    if tab in ("stats", "recordings"):
+        dates = report_range()
+        data = {"dates": dates}
+        if tab == "recordings":
+            data["calls"] = call_history(user["staff_id"], dates)
         else:
-            dates = report_range()
-            data["dates"] = dates
-            if tab == "recordings":
-                data["calls"] = call_history(user["staff_id"], dates)
-            else:
-                team = staff_queries.team_name(user["team_id"]) if user["team_id"] else None
-                own_team = bool(team and request.args.get("scope") == "team")
-                data.update(team=team, scope="team" if own_team else "mine",
-                            report=statistics(dates, staff_id=user["staff_id"], own_team=own_team))
+            team = staff_queries.team_name(user["team_id"]) if user["team_id"] else None
+            own_team = bool(team and request.args.get("scope") == "team")
+            data.update(team=team, scope="team" if own_team else "mine",
+                        report=statistics(dates, staff_id=user["staff_id"], own_team=own_team))
         return render_template("agent.html", user=user, tab=tab, **data)
     data = desk_lists(user, tab, channel)
     if not detail and data["tab"] != "dashboard" and data["items"]:
@@ -339,7 +336,7 @@ def agent_desk(user, detail=None):
     case = detail["case"] if detail else None
     if data["tab"] == "dashboard":
         data["notices"] = notices(latest=True)
-        data.update(quota=quota_rows(user["staff_id"])[0], periods=PERIODS, case_summary=case_status_breakdown())
+        data.update(case_summary=case_status_breakdown(), **dashboard_quota(user))
     return render_template(
         "agent.html", user=user, detail=detail, case=case, selected_id=case["case_id"] if case else None,
         explicit_case=explicit_case, **data,
@@ -362,7 +359,7 @@ def desk_updates():
     }
     if data["tab"] == "dashboard":
         result["notice_html"] = render_template("_notices.html", notices=notices(latest=True))
-        result["quota_html"] = render_template("_quota_rows.html", quota=quota_rows(user["staff_id"])[0], periods=PERIODS)
+        result["quota_html"] = render_template("_quota_rows.html", **dashboard_quota(user))
         result["chart_html"] = render_template("_case_chart.html", case_summary=case_status_breakdown())
     elif data["tab"] == "closed":
         result["history_html"] = render_template("_agent_history.html", recent_cases=data["recent_cases"])
@@ -397,7 +394,7 @@ def inquiry_page():
     policy_on = bool(voice_queries.policy()["enabled"])
     # 운영자가 정한 음성 상담 상태와 실제 시작 가능 여부(서버 키 설정 포함)를 화면에 각각 전달한다.
     response = make_response(render_template("inquiry.html", case=case, opened=request.args.get("chat") == "open", policy_on=policy_on,
-                                             voice_enabled=policy_on and bool(os.environ.get("OPENAI_API_KEY", "").strip())))
+                                             voice_enabled=policy_on and openai_settings.configured()))
     if not visitor:
         # 첫 방문에서는 티켓 없이 방문 세션만 발급한다. 채팅 접수는 open_inquiry에서 처리한다.
         token = secrets.token_urlsafe(32)

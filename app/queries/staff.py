@@ -70,7 +70,8 @@ def agent_account(staff_id, *, lock=False):
 def create_agent(staff_id, login_id, display_name, password_hash):
     # 새 상담원 계정을 등록한다.
     run(
-        "INSERT INTO staff_account (staff_id,login_id,display_name,password_hash,role) VALUES (%s,%s,%s,%s,'AGENT')",
+        "INSERT INTO staff_account (staff_id,login_id,display_name,password_hash,role,team_id) "
+        "SELECT %s,%s,%s,%s,'AGENT',team_id FROM staff_team WHERE is_default=TRUE",
         (staff_id, login_id, display_name, password_hash),
     )
     run("INSERT INTO agent_quota (staff_id) VALUES (%s)", (staff_id,))
@@ -110,8 +111,8 @@ def set_quota(staff_id, daily, weekly, monthly):
 
 
 def teams():
-    # 팀 목록을 이름순으로 조회한다.
-    return rows("SELECT team_id,name FROM staff_team ORDER BY name")
+    # 조직 화면에는 기본 팀을 먼저 표시한다.
+    return rows("SELECT team_id,name,daily,weekly,monthly FROM staff_team ORDER BY is_default DESC,name")
 
 
 def team_name(team_id):
@@ -121,7 +122,7 @@ def team_name(team_id):
 
 def lock_team(team_id):
     # 수정할 팀을 잠그고 현재 이름을 조회한다.
-    return one("SELECT name FROM staff_team WHERE team_id=%s FOR UPDATE", (team_id,))
+    return one("SELECT name,daily,weekly,monthly FROM staff_team WHERE team_id=%s FOR UPDATE", (team_id,))
 
 
 def create_team(team_id, name):
@@ -132,6 +133,10 @@ def create_team(team_id, name):
 def rename_team(team_id, name):
     # 팀 이름을 바꾼다.
     run("UPDATE staff_team SET name=%s WHERE team_id=%s", (name, team_id))
+
+
+def set_team_quota(team_id, daily, weekly, monthly):
+    run("UPDATE staff_team SET daily=%s,weekly=%s,monthly=%s WHERE team_id=%s", (daily, weekly, monthly, team_id))
 
 
 def team_roster():

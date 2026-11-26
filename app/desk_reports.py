@@ -5,6 +5,7 @@ from flask import request
 
 from .common import ApiError
 from .db import utcnow
+from .queries import ai_outcomes
 from .queries import reports as report_queries
 from .queries.staff import notices
 
@@ -36,6 +37,20 @@ def date_value(value):
 def midnight(day):
     # 사용자가 고른 날짜의 한국 자정을 DB의 UTC 시각으로 옮긴다. 한국 시간 00시는 UTC로 전날 15시다.
     return datetime.combine(day, time.min) - KST
+
+
+def quota_starts():
+    day = today()
+    return midnight(day), midnight(day - timedelta(days=day.weekday())), midnight(day.replace(day=1))
+
+
+def dashboard_quota(user):
+    starts = quota_starts()
+    return {
+        "quota": report_queries.quota_progress(starts, user["staff_id"])[0],
+        "team_quota": report_queries.team_quota(user["team_id"], starts) if user["team_id"] else None,
+        "periods": report_queries.PERIODS,
+    }
 
 
 def report_range():
@@ -97,10 +112,20 @@ def dashboard_charts(channel=None):
     counts, hourly = report_queries.dashboard_counts(
         midnight(start), midnight(end), midnight(current), midnight(current + timedelta(days=1)), channel
     )
+    outcomes = ai_outcomes.counts(midnight(start), midnight(end), channel)
+    ai_view = "handoff" if request.args.get("ai_view") == "handoff" else "resolution"
+    if ai_view == "handoff":
+        chart = pie({"WEB": "채팅 전환", "PHONE": "통화 전환"}, ("#54b4bc", "#5189ae"),
+                    {r["channel"]: r["n"] for r in outcomes if r["status"] == "HANDOFF"})
+    else:
+        labels = {"RESOLVED": "고객 확인 해결", "HANDOFF": "상담원 전환"}
+        chart = pie(labels, ("#3c9d8c", "#5987ad"),
+                    {key: sum(r["n"] for r in outcomes if r["status"] == key) for key in labels})
     slots = [{"web": 0, "phone": 0} for _ in range(24)]
     for row in hourly:
         slots[row["h"]] = {"web": int(row["web"]), "phone": int(row["phone"])}
     return dict(unit=unit, day=start, month=start.isoformat()[:7], today=current,
+                ai_view=ai_view, ai_chart=chart, ai_unknown=sum(r["n"] for r in outcomes if r["status"] == "UNKNOWN"),
                 topics=pie({**TOPICS, None: "미분류"}, TOPIC_COLORS, {r["inquiry_type"]: r["n"] for r in counts}),
                 slots=slots, peak=max(1, *(max(row.values()) for row in slots)), arrivals=sum(r["web"] + r["phone"] for r in slots))
 

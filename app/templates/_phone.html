@@ -3,24 +3,7 @@
     <section class="phone-fields" aria-label="전화 응대 기록">
     {% if closed and not phone %}<p class="muted">보관 기한이 지난 응대 기록입니다.</p>{% else %}
       <form method="post" action="/staff/cases/{{ case.case_id }}/phone-response" class="stack" data-action="phone" data-id="{{ case.case_id }}">
-        <fieldset class="stack" {% if closed %}disabled{% endif %}>
-          <div class="two-col">
-            <label>통화 일시<input type="datetime-local" name="call_at" data-datetime="{{ phone.call_at or '' }}"></label>
-            <label>녹취 안내 결과<select name="consent_state">
-              <option value="">확인 전</option>
-              <option value="AGREED" {% if phone.consent_state == 'AGREED' %}selected{% endif %}>동의</option>
-              <option value="REFUSED" {% if phone.consent_state == 'REFUSED' %}selected{% endif %}>거절</option>
-            </select></label>
-          </div>
-          <div class="two-col"><label>통화 구분<select name="call_direction"><option value="">미기록</option>{% for key,name in direction_names.items() %}<option value="{{ key }}" {% if phone.call_direction == key %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
-          <label>통화 시간(초)<input name="talk_seconds" type="number" min="0" max="86400" value="{{ phone.talk_seconds if phone.talk_seconds is number else '' }}"></label></div>
-          <label>고객 문의<textarea name="inquiry" rows="3" maxlength="4000">{{ phone.inquiry or '' }}</textarea></label>
-          <label>안내 내용<textarea name="guidance" rows="3" maxlength="4000">{{ phone.guidance or '' }}</textarea></label>
-          <label>후속 조치<select name="followup_required">
-            <option value="">선택</option><option value="yes" {% if phone.followup_required is sameas true %}selected{% endif %}>필요</option>
-            <option value="no" {% if phone.followup_required is sameas false %}selected{% endif %}>불필요</option>
-          </select></label>
-        </fieldset>
+        {% include '_phone_fields.html' %}
         {% if not closed %}<button class="secondary" type="submit">응대 기록 저장</button>{% endif %}
       </form>
     {% endif %}</section>

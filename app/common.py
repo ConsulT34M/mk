@@ -16,11 +16,22 @@ CHAT_COOKIE = "tm_chat"
 INQUIRY_COOKIE = "__Host-tm_inquiry"
 # 뷰는 업무 오류 코드만 지정한다. HTTP 상태와 사용자에게 표시할 문구는 여기서 짝을 맞춘다.
 ERRORS = {
+    "AI_CONSULTATION_FINISHED": (409, "이미 결과가 기록된 AI 상담입니다. 새 상담을 시작해 주세요."),
+    "AI_HANDOFF_ROOM_CLOSED": (409, "이전 상담원 채팅이 종료되었습니다. 새 상담방으로 연결해 주세요."),
+    "OPENAI_INVALID_KEY": (400, "sk-로 시작하는 OpenAI API 키를 입력해 주세요."),
+    "OPENAI_INVALID_MODEL": (400, "해당 상담 방식에서 사용할 모델을 선택해 주세요."),
+    "OPENAI_MODEL_KEY_REQUIRED": (400, "API 키를 입력한 뒤 모델을 조회해 주세요."),
+    "OPENAI_MODEL_AUTH_FAILED": (422, "OpenAI API 키와 모델 조회 권한을 확인해 주세요."),
+    "OPENAI_MODEL_LIMIT": (429, "모델 조회 요청이 많습니다. 잠시 후 다시 시도해 주세요."),
+    "OPENAI_MODELS_UNAVAILABLE": (502, "OpenAI 모델 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."),
+    "OPENAI_SETTINGS_CHANGED": (409, "다른 관리자가 설정을 변경했습니다. 새로고침한 뒤 다시 저장해 주세요."),
+    "OPENAI_SETTINGS_UNAVAILABLE": (503, "OpenAI 키 저장소에 접근할 수 없습니다. 서버 설정을 확인해 주세요."),
     "AI_CHAT_DISABLED": (409, "AI 채팅 상담 운영이 중지되어 있습니다."),
     "AI_CHAT_NOT_CONFIGURED": (503, "AI 채팅 서비스를 사용할 수 없습니다. 관리자에게 문의해 주세요."),
     "AI_CHAT_LIMIT_REACHED": (429, "AI 채팅 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요."),
     "AI_CHAT_UNAVAILABLE": (502, "AI 답변을 받지 못했어요. 잠시 후 다시 시도해 주세요."),
     "INVALID_INPUT": (400, "입력 항목을 확인해 주세요."),
+    "CASE_CATEGORY_CHANGED": (409, "문의 유형이 변경됐습니다. 새로고침 후 다시 선택해 주세요."),
     "VOICE_NOT_CONFIGURED": (503, "서버에 OpenAI API 키를 설정하면 음성 상담을 시작할 수 있어요."),
     "VOICE_VISITOR_EXPIRED": (401, "문의 페이지를 새로고침한 뒤 음성 상담을 다시 시작해 주세요."),
     "VOICE_SESSION_NOT_FOUND": (404, "종료되었거나 찾을 수 없는 음성 상담이에요."),

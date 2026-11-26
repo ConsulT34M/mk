@@ -29,6 +29,50 @@ async function api(path, { method = "GET", body, actor, signal, keepalive = fals
   return data;
 }
 
+const modelLookup = $("#openai-model-lookup");
+if (modelLookup) {
+  const {api_key: keyInput, chat_model: modelSelect} = modelLookup.form.elements;
+  const status = $("#openai-model-status");
+  const original = Array.from(modelSelect.options, option => option.cloneNode(true));
+  const saved = modelSelect.value;
+  let pending = null;
+
+  keyInput.addEventListener("input", () => {
+    pending?.abort();
+    pending = null;
+    modelLookup.disabled = false;
+    modelSelect.replaceChildren(...original.map(option => option.cloneNode(true)));
+    modelSelect.value = saved;
+    status.textContent = "";
+  });
+
+  modelLookup.addEventListener("click", async () => {
+    const request = new AbortController();
+    pending = request;
+    modelLookup.disabled = true;
+    status.textContent = "채팅 모델을 조회하고 있습니다.";
+    try {
+      const {models} = await api(modelLookup.dataset.url, {
+        method: "POST", body: {api_key: keyInput.value.trim()}, signal: request.signal,
+      });
+      if (pending !== request) return;
+      const selected = modelSelect.value;
+      const choices = models.map(name => new Option(name, name));
+      if (selected && !models.includes(selected)) choices.push(new Option(selected + " (이번 조회에 없음)", selected));
+      modelSelect.replaceChildren(original[0].cloneNode(true), ...choices);
+      modelSelect.value = selected;
+      status.textContent = models.length ? "채팅 모델 " + models.length + "개를 불러왔습니다." : "조회된 채팅 모델이 없습니다.";
+    } catch (error) {
+      if (pending === request) status.textContent = error.message;
+    } finally {
+      if (pending === request) {
+        pending = null;
+        modelLookup.disabled = false;
+      }
+    }
+  });
+}
+
 const dateFormat = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 const ticketClock = new Intl.DateTimeFormat("ko-KR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 function formatTimes(root) {
@@ -197,12 +241,14 @@ document.addEventListener("submit", async event => {
             else if (values[key] === "") values[key] = null;
           }
           if (!Object.keys(values).length) { tell("수정할 내용이 없습니다."); break; }
+          if (values.consent_state === "REFUSED" && !window.confirm("녹취 거절을 저장하고 이 상담의 기존 녹취를 파기할까요?")) break;
           if (values.call_at) values.call_at = new Date(values.call_at).toISOString();
           if (values.followup_required) values.followup_required = values.followup_required === "yes";
         }
         if (form.hasAttribute("data-team-form")) {
           values.members = data.getAll("members");
           values.previous = JSON.parse(values.previous);
+          if (data.has("previous_goals")) values.previous_goals = JSON.parse(values.previous_goals);
         }
         if (form.hasAttribute("data-ai-chat-policy")) values.enabled = data.has("enabled");
         if (form.hasAttribute("data-ai-policy")) {
@@ -288,7 +334,7 @@ if (document.querySelector(".admin-desk")) {
   }
 }
 
-const adminDashboard = $("#admin-dashboard");
+const adminDashboard = $("#admin-dashboard, #admin-ai-chats, #admin-channel-chat, .admin-desk #tickets");
 const aiCalls = $("#ai-calls");
 function updateCallRows(next) {
   const body = aiCalls.querySelector("tbody");
@@ -328,6 +374,11 @@ if (adminDashboard || aiCalls) {
       if (!next) throw new Error();
       syncStatus.textContent = "";
       if (aiCalls) {
+        const usage = $("#token-usage");
+        const replacement = page.querySelector("#token-usage");
+        if (replacement && usage && !usage.contains(document.activeElement) && !usage.isEqualNode(replacement)) {
+          usage.replaceWith(replacement);
+        }
         const history = page.querySelector("#rkx-voice-calls tbody");
         const current = document.querySelector("#rkx-voice-calls tbody");
         if (current && history) {

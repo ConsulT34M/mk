@@ -22,6 +22,10 @@ def session(chat_id):
 def lock_session(chat_id, subject, greeting):
     run("INSERT INTO ai_chat_session (chat_id,subject_ref,greeting) VALUES (%s,%s,%s) "
         "ON DUPLICATE KEY UPDATE chat_id=ai_chat_session.chat_id", (chat_id, subject, greeting))
+    return owned_for_update(chat_id, subject)
+
+
+def owned_for_update(chat_id, subject):
     return one("SELECT * FROM ai_chat_session WHERE chat_id=%s AND subject_ref=%s FOR UPDATE", (chat_id, subject))
 
 

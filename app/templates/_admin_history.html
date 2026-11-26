@@ -1,11 +1,21 @@
 {% set web = detail.channel == 'WEB' %}
 {% set history_url = url_for('management.edit_history', case_id=detail.case_id) %}
-<p class="record-context"><span class="case-ref">#{{ detail.case_id[:8]|upper }}</span><span>접수 {{ time_at(detail.opened_at) }}</span>{% if detail.closed_at %}<span>종결 {{ time_at(detail.closed_at) }}</span>{% endif %}</p>
+<section class="board-panel admin-panel" id="case-info">
+  <div class="section-title"><h3>{{ staff_icon('chat' if web else 'phone') }}상담 정보</h3><span class="case-ref">#{{ detail.case_id[:8]|upper }}</span></div>
+  {{ case_facts(detail, assignee.display_name or assignee.login_id) }}
+  {% if detail.closed_at %}<p class="record-context">종결 {{ time_at(detail.closed_at) }}</p>{% endif %}
+  {% if editing %}
+  <form method="post" action="{{ url_for('management.edit_category',case_id=detail.case_id) }}" class="admin-form" data-action="admin" data-done="문의 유형을 저장했습니다.">
+    <input type="hidden" name="previous_category" value="{{ detail.inquiry_type or '' }}">
+    <label>문의 유형<select name="inquiry_type" aria-label="문의 유형"><option value="">미분류</option>{% for key,label in topic_names.items() %}<option value="{{ key }}" {% if detail.inquiry_type==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <button type="submit" class="admin-btn">유형 저장</button>
+  </form>{% endif %}
 {% if assignments %}
 <details class="assignment-log"><summary>배정 이력 · 현재 {{ assignments[-1].login_id or '미배정' }}</summary>
   <ul>{% for change in assignments %}<li>{{ time_at(change.at) }} · {{ change.login_id ~ ' 배정' if change.login_id else '배정 해제' }}</li>{% endfor %}</ul>
 </details>
 {% endif %}
+</section>
 {% if not visible %}
 <section class="board-panel admin-panel"><p class="admin-empty">보관 기한이 지난 상담 기록입니다.</p></section>
 {% elif web %}
@@ -13,10 +23,10 @@
   <div class="section-title"><h3>대화 내역</h3><span class="count">{{ messages|length }}</span></div>
   {% for m in messages %}
   {% set message_url = url_for('management.edit_message', case_id=detail.case_id, message_id=m.message_id) %}
-  <article class="managed-message">
-    <div class="message-meta"><strong>{{ '고객' if m.author_role == 'CUSTOMER' else '상담원' }}</strong>{{ time_at(m.sent_at) }}</div>
-    <p class="message-text">{{ m.body }}</p>
-    <div class="message-actions">
+  <article class="managed-message message{{ ' mine' if m.author_role == 'AGENT' }}">
+    <small>{{ '상담원' if m.author_role == 'AGENT' else '고객' }} · {{ time_at(m.sent_at) }}</small>
+    <p class="bubble">{{ m.body }}</p>
+    {% if editing %}<div class="message-actions">
       <details><summary class="admin-btn">수정</summary>
         <form class="admin-stack" method="post" action="{{ message_url }}" data-action="admin">
           <label>메시지 내용<textarea name="body" rows="3" maxlength="4000" required>{{ m.body }}</textarea></label>
@@ -26,21 +36,30 @@
       <form method="post" action="{{ message_url }}" data-action="admin" data-confirm="이 메시지를 삭제할까요? 고객과 상담원의 대화에도 반영됩니다." data-done="메시지를 삭제했습니다.">
         <input type="hidden" name="operation" value="delete"><button type="submit" class="admin-btn danger">삭제</button>
       </form>
-    </div>
+    </div>{% endif %}
   </article>
   {% else %}<p class="admin-empty">저장된 채팅 메시지가 없습니다.</p>{% endfor %}
 </section>
 {% else %}
 <section class="board-panel admin-panel" id="history-editor">
   <div class="section-title"><h3>전화 응대 기록</h3><span class="state-pill {{ 'enabled' if phone.consent_state == 'AGREED' else 'closed' }}">녹취 {{ {'AGREED':'동의','REFUSED':'거절','UNASKED':'미확인'}.get(phone.consent_state,'미확인') }}</span></div>
-  <form class="admin-stack" method="post" action="{{ history_url }}" data-action="admin" data-phone-fields>
-    <div class="admin-form"><label>통화 일시<input type="datetime-local" name="call_at" data-datetime="{{ phone.call_at or '' }}"></label>
-      <label>후속 조치<select name="followup_required"><option value="">미확인</option><option value="yes" {% if phone.followup_required is sameas true %}selected{% endif %}>필요</option><option value="no" {% if phone.followup_required is sameas false %}selected{% endif %}>불필요</option></select></label>
-    </div>
-    <label>고객 문의<textarea name="inquiry" maxlength="4000" rows="2">{{ phone.inquiry or '' }}</textarea></label>
-    <label>안내 내용<textarea name="guidance" maxlength="4000" rows="2">{{ phone.guidance or '' }}</textarea></label>
-    <button type="submit" class="admin-primary">응대 기록 저장</button>
-  </form>
+  {% if not editing %}<dl class="call-readout">
+    <dt>통화 일시</dt><dd>{{ time_at(phone.call_at) }}</dd>
+    <dt>통화 구분</dt><dd>{{ direction_names.get(phone.call_direction,'미기록') }}</dd>
+    <dt>통화 시간</dt><dd>{{ phone.talk_seconds|duration if phone else '미기록' }}</dd>
+    <dt>고객 문의</dt><dd>{{ phone.inquiry or '미기록' }}</dd>
+    <dt>안내 내용</dt><dd>{{ phone.guidance or '미기록' }}</dd>
+    <dt>후속 조치</dt><dd>{{ '미확인' if not phone or phone.followup_required is none else '필요' if phone.followup_required else '불필요' }}</dd>
+  </dl>{% else %}<div class="phone-fields">
+    <form method="post" action="{{ history_url }}" data-action="admin" data-phone-fields>
+      {% with closed=false %}{% include '_phone_fields.html' %}{% endwith %}
+      <button type="submit" class="admin-primary">응대 기록 저장</button>
+    </form>
+  </div>
+  <form class="history-delete" method="post" action="{{ history_url }}" data-action="admin"
+        data-confirm="이 통화의 일시·구분·시간, 고객 문의·안내 내용과 후속 조치를 삭제할까요?" data-done="전화 응대 기록을 삭제했습니다.">
+    <input type="hidden" name="operation" value="delete_phone_response"><button type="submit" class="admin-btn danger">응대 기록 삭제</button>
+  </form>{% endif %}
 </section>
 {% endif %}
 
@@ -53,8 +72,8 @@
       <span class="state-pill {{ 'enabled' if r.state == 'READY' else 'closed' }}">{{ {'READY':'저장 완료','PENDING':'등록 대기','FAILED':'저장 실패','DELETE_PENDING':'파기 대기','DESTROYED':'파기 완료'}[r.state] }}</span>
     </div>
     <p class="record-context"><span>등록 {{ time_at(r.stored_at|utcstamp) }}</span>{% if r.size_bytes is not none %}<span>{{ r.size_bytes|filesizeformat }}</span>{% endif %}</p>
-    {% if r.ai and r.state == 'READY' and r.editable %}<audio controls preload="none" aria-label="AI 상담 녹취" src="{{ url_for('management.play_voice', recording_id=r.recording_id) }}"></audio>{% endif %}
-    {% if r.editable %}{{ recording_actions(r, url_for('management.edit_recording', case_id=detail.case_id, recording_id=r.recording_id)) }}{% endif %}
+    {% if r.state == 'READY' %}<audio controls preload="none" aria-label="{{ 'AI 상담 녹취' if r.ai else '통화 녹취' }}" src="{{ url_for('management.play_case_recording', case_id=detail.case_id, recording_id=r.recording_id) }}"></audio>{% endif %}
+    {% if r.editable and editing %}{{ recording_actions(r, url_for('management.edit_recording', case_id=detail.case_id, recording_id=r.recording_id), compact=true) }}{% endif %}
   </article>{% else %}<p class="admin-empty">등록된 녹취가 없습니다.</p>{% endfor %}
 </section>
 {% endif %}
@@ -63,13 +82,14 @@
 {% include "_admin_notes.html" %}
 {% if detail.closed_at %}
 <section class="board-panel admin-panel"><h3>처리 결과</h3>
-  <form class="admin-stack" method="post" action="{{ history_url }}" data-action="admin">
+  {% if editing %}<form class="admin-stack" method="post" action="{{ history_url }}" data-action="admin">
+    <label>처리 결과<select name="outcome"><option value="">미기록</option>{% for key,label in outcome_names.items() %}<option value="{{ key }}" {% if detail.outcome==key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
     <label>종결 메모<textarea name="result_note" maxlength="4000" rows="2" required>{{ result or '' }}</textarea></label>
     <button type="submit" class="admin-primary">결과 저장</button>
-  </form>
+  </form>{% else %}<dl class="call-readout"><dt>처리 결과</dt><dd>{{ outcome_names.get(detail.outcome,'미기록') }}</dd><dt>종결 메모</dt><dd>{{ result or '미기록' }}</dd></dl>{% endif %}
 </section>
 {% endif %}
-<form class="history-delete" method="post" action="{{ history_url }}" data-action="admin" data-confirm="{{ '대화 전체, 직원용 기록과 처리 결과를 삭제할까요?' if web else '전화 응대 기록, 직원용 기록, 처리 결과와 이 상담의 녹취를 모두 삭제할까요?' }} 티켓과 변경 이력은 보존됩니다." data-done="상담 기록을 삭제했습니다.">
+{% if editing %}<form class="history-delete" method="post" action="{{ history_url }}" data-action="admin" data-confirm="{{ '대화 전체, 직원용 기록과 처리 결과를 삭제할까요?' if web else '전화 응대 기록, 직원용 기록, 처리 결과와 이 상담의 녹취를 모두 삭제할까요?' }} 티켓과 변경 이력은 보존됩니다." data-done="상담 기록을 삭제했습니다.">
   <input type="hidden" name="operation" value="delete"><button type="submit" class="admin-btn danger">상담 내용만 삭제</button>
-</form>
+</form>{% endif %}
 {% endif %}

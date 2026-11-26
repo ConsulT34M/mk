@@ -4,8 +4,7 @@
   <div class="thread" {% if web %}data-chat data-id="{{ case.case_id }}" data-actor="staff"{% endif %}>
     <header class="section-title thread-head"><a class="mobile-back" href="{{ url_for('queue_page',tab=tab,channel=archive_channel) }}">‹ 목록</a>
       <h3>{{ staff_icon('chat' if web else 'edit') }}{{ '웹채팅 상담' if web else '전화 응대 기록' }}</h3><span class="case-ref">#{{ case.case_id[:8]|upper }}</span></header>
-    <dl class="record-facts"><dt>접수 일시</dt><dd><time datetime="{{ case.opened_at }}">{{ case.opened_at[:16]|replace('T',' ') }}</time></dd><dt>상담 상태</dt><dd><span class="state-pill {{ 'closed' if closed else 'in_progress' }}" data-chat-state>{{ '종결' if closed else '진행 중' }}</span></dd>
-      <dt>문의 유형</dt><dd>{{ topic_names.get(case.inquiry_type,'미분류') }}</dd><dt>담당 상담원</dt><dd>{{ user.display_name or user.login_id }}</dd></dl>
+    {{ case_facts(case, user.display_name or user.login_id) }}
     {% if web %}
     <div class="thread-body">
       <div class="desk-messages" data-messages role="log" aria-label="상담 대화" aria-live="polite"></div>

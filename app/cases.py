@@ -261,10 +261,19 @@ def categorize(case_id):
     return {"inquiry_type": category}
 
 
+PHONE_RECORD_FIELDS = ("call_at", "call_direction", "talk_seconds", "inquiry", "guidance", "followup_required")
+
+
 def save_phone_response(case_id, data, allow_clear=False):
     # 통화 방향·길이는 통계가 읽는 support_case에, 통화 일시·문의·안내·동의는 phone_response에 저장한다.
     # 부분 수정이므로 실제 요청에 담긴 필드만 두 묶음에 수집한다.
-    metrics = {}
+    metrics, edits = {}, {}
+    if allow_clear:
+        data = dict(data)
+        for key in PHONE_RECORD_FIELDS:
+            if key in data and data[key] is None:
+                target = metrics if key in ("call_direction", "talk_seconds") else edits
+                target[key] = data.pop(key)
     if "call_direction" in data:
         value = data["call_direction"]
         if not isinstance(value, str) or value not in DIRECTIONS:
@@ -276,12 +285,6 @@ def save_phone_response(case_id, data, allow_clear=False):
         if not value.isascii() or not value.isdecimal() or len(value) > 6 or int(value) > 86400:
             raise ApiError("INVALID_INPUT")
         metrics["talk_seconds"] = int(value)
-    edits = {}
-    if allow_clear:
-        # 관리자 이력 수정은 비울 수 있는 필드만 골라 전달한다. 명시한 null은 열을 비우고,
-        # 요청에서 빠진 필드는 기존 값을 유지한다.
-        edits = {key: None for key, value in data.items() if value is None}
-        data = {key: value for key, value in data.items() if value is not None}
     if "call_at" in data:
         edits["call_at"] = call_datetime(data["call_at"])
     for key in ("inquiry", "guidance"):

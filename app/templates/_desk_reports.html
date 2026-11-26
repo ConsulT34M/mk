@@ -1,14 +1,14 @@
-{% macro pie(chart, ring=false) %}
+{% macro pie(chart, ring=false, heading=none, center=none) %}
 <div class="distribution">
   <svg class="distribution-plot" viewBox="0 0 100 100" aria-hidden="true">
     {% if not chart.total %}<circle cx="50" cy="50" r="49" fill="#e2e8ec"/>{% endif %}
     {% for part in chart.slices if part.count %}
       {% if part.sector %}<path d="{{ part.sector }}" fill="{{ part.color }}" stroke="white" stroke-width=".5"/>{% else %}<circle cx="50" cy="50" r="50" fill="{{ part.color }}"/>{% endif %}
     {% endfor %}
-    {% if ring or not chart.total %}{% if ring %}<circle cx="50" cy="50" r="34" fill="white"/>{% endif %}<text x="50" y="55" text-anchor="middle">{{ chart.total }}건</text>{% endif %}
+    {% if ring or not chart.total %}{% if ring %}<circle cx="50" cy="50" r="34" fill="white"/>{% endif %}<text x="50" y="55" text-anchor="middle">{{ center if center is not none else chart.total|string ~ '건' }}</text>{% endif %}
   </svg>
-  <table class="distribution-key"><thead><tr><th>{{ '상담 상태' if ring else '문의 유형' }}</th><th>건수</th><th>비율</th></tr></thead><tbody>
-    {% for part in chart.slices %}<tr><th scope="row"><svg class="legend-swatch" width="8" height="8" aria-hidden="true"><rect width="8" height="8" fill="{{ part.color }}"/></svg>{{ part.label }}</th><td>{{ part.count }}</td><td>{{ '%g'|format(part.percent|round(1)) }}%</td></tr>{% endfor %}
+  <table class="distribution-key"><thead><tr><th>{{ heading or ('상담 상태' if ring else '문의 유형') }}</th><th>건수</th><th>비율</th></tr></thead><tbody>
+    {% for part in chart.slices %}<tr><th scope="row"><svg class="legend-swatch" width="8" height="8" aria-hidden="true"><rect width="8" height="8" fill="{{ part.color }}"/></svg>{{ part.label }}</th><td>{{ part.count }}</td><td>{{ '%g%%'|format(part.percent|round(1)) if chart.total or not heading else '—' }}</td></tr>{% endfor %}
     </tbody><tfoot><tr><th scope="row">합계</th><td>{{ chart.total }}</td><td>{{ '100%' if chart.total else '—' }}</td></tr></tfoot></table>
 </div>
 {% endmacro %}

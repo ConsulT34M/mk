@@ -303,6 +303,15 @@ def main():
     history = "/admin/cases/" + web
     manage = history + "/messages/" + first["message_id"]
     assert msg["body"].encode() in admin.call(history)
+    view, edit = admin.call(history + "?tab=chats"), admin.call(history + "?tab=chats&mode=edit")
+    assert msg["body"].encode() in view and manage.encode() not in view and manage.encode() in edit
+    assert b'id="admin-channel-chat"' in view and b'id="admin-channel-chat"' not in edit
+    category = history + "/category"
+    agent.call(category, {"inquiry_type": "GUIDE"}, 403)
+    admin.call(category, {"inquiry_type": "unknown"}, 400)
+    admin.call(category, {"inquiry_type": "GUIDE", "previous_category": ""})
+    admin.call(category, {"inquiry_type": "TRADE", "previous_category": ""}, 409)
+    assert agent.call("/staff/cases/" + web)["case"]["inquiry_type"] == "GUIDE"
     agent.call(manage, {"body": "정정"}, 403)
     admin.call(manage, {"body": "정정"})
     assert customer.call(room + "/messages")["items"][0]["body"] == "정정"
@@ -310,10 +319,12 @@ def main():
     assert len(customer.call(room + "/messages")["items"]) == 1
     customer.call(room + "/messages", msg, 410)
     agent.call("/staff/cases/" + web + "/close", {"result_note": "안내 완료"})
-    admin.call(history + "/history", {"result_note": "처리 결과 정정"})
+    admin.call(history + "/history", {"result_note": "처리 결과 정정", "outcome": "FOLLOWUP"})
     assert agent.call("/staff/cases/" + web)["result_note"] == "처리 결과 정정"
+    assert agent.call("/staff/cases/" + web)["case"]["outcome"] == "FOLLOWUP"
     admin.call("/admin/notes", {"case_id": web, "request_id": uid(), "body": "종결 후 직원용 기록"}, 201)
     admin.call(history + "/history", {"operation": "delete"})
+    assert agent.call("/staff/cases/" + web)["case"]["outcome"] is None
     assert not agent.call("/staff/cases/" + web)["staff_notes"]
     assert not customer.call(room + "/messages")["items"]
     agent.call(claim, {}, 409)
@@ -336,7 +347,8 @@ def main():
     path = "/staff/cases/" + phone
     assert phone in agent.call(dashboard)["html"]
     assert agent.call(path + "/claim", {})["current_agent_id"] == staff["test"]
-    assert (path + "/assignee").encode() in admin.call("/admin")
+    assert (path + "/assignee").encode() in admin.call("/admin?tab=calls")
+    assert (path + "/assignee").encode() not in admin.call("/admin")
     admin.call(path + "/assignee", {"new_agent_id": staff["agent2"], "previous_agent_id": ""}, 409)
     assert "전화 응대 기록".encode() in agent.call("/portal/" + phone)
     form, mime, wav = audio_upload(uid())
@@ -352,7 +364,12 @@ def main():
     assert agent.call(audio) == wav
     admin.call(audio, expect=403)
     history = "/admin/cases/" + phone
+    admin_audio = history + "/recordings/" + rec + "/content"
+    assert admin.call(admin_audio) == wav
+    next_agent.call(admin_audio, expect=403)
+    assert admin_audio.encode() in admin.call(history + "?tab=calls")
     admin.call(history + "/history", {"guidance": "관리자 정정"})
+    assert "관리자 정정".encode() in admin.call(history + "?tab=calls")
     assert agent.call(path)["phone_response"]["guidance"] == "관리자 정정"
     admin.call(history + "/history", {"guidance": None})
     assert agent.call(path)["phone_response"]["guidance"] is None
@@ -372,6 +389,22 @@ def main():
     change = {"previous_agent_id": staff["test"], "new_agent_id": staff["agent2"]}
     handoff_note = {"case_id": phone, "request_id": uid(), "body": "전화 인계 " + uid()}
     admin.call("/admin/notes", handoff_note, 201)
+    view, edit = admin.call(history + "?tab=calls"), admin.call(history + "?tab=calls&mode=edit")
+    assert admin_audio.encode() in view and b"delete_phone_response" not in view and b"delete_phone_response" in edit
+    assert handoff_note["body"].encode() in view and b'data-phone-fields' in edit
+    edits = history + "/history"
+    admin.call(edits, {"call_direction": "OUTBOUND", "talk_seconds": 75})
+    admin.call(edits, {"talk_seconds": 100000}, 400)
+    assert agent.call(path)["phone_response"]["talk_seconds"] == 75
+    admin.call(edits, {"talk_seconds": None})
+    assert agent.call(path)["phone_response"]["call_direction"] == "OUTBOUND"
+    agent.call(edits, {"operation": "delete_phone_response"}, 403)
+    admin.call(edits, {"operation": "delete_phone_response"})
+    cleared = agent.call(path)
+    assert all(cleared["phone_response"][key] is None for key in ("call_at","call_direction","talk_seconds","inquiry","guidance","followup_required"))
+    assert cleared["phone_response"]["consent_state"] == "AGREED" and admin.call(admin_audio) == wav
+    assert cleared["staff_notes"][0]["body"] == handoff_note["body"]
+    admin.call(edits, notes)
     admin.call(path + "/assignee", change)
     admin.call(path + "/assignee", change)
     assert "test → agent2".encode() in admin.call("/admin?tab=audit")
@@ -382,7 +415,7 @@ def main():
     assert next_agent.call(audio) == wav
     next_agent.call(path + "/close", {"result_note": "안내 완료"})
     admin.call(path + "/assignee", {"new_agent_id": staff["test"]}, 409)
-    assert (path + "/assignee").encode() not in admin.call("/admin")
+    assert (path + "/assignee").encode() not in admin.call("/admin?tab=calls")
     next_agent.call(path + "/phone-response", notes, 409)
     intake = partner.call("/cases", {"channel": "PHONE", "support_subject_ref": uid(), "intake_request_id": uid()}, 201)
     manual = "/staff/cases/" + intake["case_id"]
@@ -410,6 +443,8 @@ def main():
             raise AssertionError("Automatic retention cleanup did not finish within the requested interval")
         assert next_agent.call(audio) == wav
         assert next_agent.call(path)["result_note"] is None and not customer.call(room + "/messages")["items"]
+        expired_editor = admin.call(history + "?tab=calls&mode=edit")
+        assert b"data-phone-fields" not in expired_editor and admin_audio.encode() in expired_editor
         admin.call(history + "/history", {"guidance": "만료 후 수정"}, 410)
         admin.call("/admin/notes", handoff_note, 410)
         assert not next_agent.call(path)["staff_notes"] and handoff_note["body"].encode() not in admin.call("/admin?tab=history")

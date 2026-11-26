@@ -9,14 +9,14 @@
   {% set menu = [
     ('상담 운영', [('overview','대시보드','chart'),('calls','통화','phone'),('chats','채팅','chat')]),
     ('AI', [('ai-calls','AI 통화','waveform'),('ai-chats','AI 채팅','chat'),('ai','AI 설정','settings')]),
-    ('관리', [('agents','계정 관리','person'),('org','조직','team'),('notices','공지사항','notice'),('board','게시판','list'),('audit','변경 이력','history')])
+    ('관리', [('org','조직','team'),('agents','계정 관리','person'),('audit','변경 이력','history')])
   ] %}
   {% if tab=='quotas' %}{% set active_menu='agents' %}
   {% elif tab=='history' %}{% set active_menu='chats' if (detail and detail.channel=='WEB') or (not detail and selected=='WEB') else 'calls' %}{% endif %}
 {% else %}
   {% set menu = [
     ('상담 업무', [('dashboard','대시보드','home'),('desk','내 상담','chat'),('closed','내 종결 상담','archive')]),
-    ('조회', [('recordings','통화 내역·녹취','phone'),('stats','통계','chart'),('notices','공지사항','notice'),('board','게시판','list')])
+    ('조회', [('recordings','통화 내역·녹취','phone'),('stats','통계','chart')])
   ] %}
   {% set submenus = {
     'desk': [('calls','통화 상담',none),('chats','채팅 상담',none)],
@@ -24,30 +24,37 @@
   } %}
   {% if tab in ('calls','chats') %}{% set active_menu='desk' %}{% endif %}
 {% endif %}
+{% set menu = menu + [('커뮤니티', [('board','게시판','list')])] %}
 
 {% macro staff_icon(name) %}<svg class="icon" aria-hidden="true" width="16" height="16"><use href="{{ url_for('static', filename='staff-icons.svg') }}#{{ name }}"></use></svg>{% endmacro %}
 
-{% macro navigation(surface) %}
+{% macro case_facts(ticket, assignee_name) %}
+<dl class="record-facts">
+  <dt>접수 일시</dt><dd><time datetime="{{ ticket.opened_at }}">{{ ticket.opened_at[:16]|replace('T',' ') }}</time></dd>
+  <dt>상담 상태</dt><dd><span class="state-pill {{ ticket.status|lower }}" data-chat-state>{{ {'CLOSED':'종결','IN_PROGRESS':'진행 중','QUEUED':'배정 대기'}[ticket.status] }}</span></dd>
+  <dt>문의 유형</dt><dd>{{ topic_names.get(ticket.inquiry_type,'미분류') }}</dd><dt>담당 상담원</dt><dd>{{ assignee_name or '미배정' }}</dd>
+</dl>
+{% endmacro %}
+
+{% macro navigation() %}
 <nav aria-label="{{ role_name }} 업무 메뉴">
   {% for group, links in menu %}
-  {% if is_admin %}<details class="admin-nav-group" name="admin-nav-{{ surface }}" {% if active_menu in links|map(attribute=0)|list %}open{% endif %}>
-  <summary class="rail-group">{{ group }}</summary>{% else %}<p class="rail-group">{{ group }}</p>{% endif %}
+  <p class="rail-group">{{ group }}</p>
   {% for key,label,icon in links %}
   {% if key in submenus %}
-  <details class="nav-group" {% if key==active_menu %}open{% endif %}>
-    <summary class="nav-item">{{ staff_icon(icon) }}<span>{{ label }}</span></summary>
+  <div class="nav-group" role="group" aria-label="{{ label }}">
+    <p class="nav-item">{{ staff_icon(icon) }}<span>{{ label }}</span></p>
     {% for child_tab,child_label,channel in submenus[key] %}
     <a class="nav-item nav-child" href="{{ url_for(endpoint,tab=child_tab,channel=channel) }}"
        {% if tab==child_tab and channel==archive_channel|default(none) %}aria-current="page"{% endif %}>{{ child_label }}</a>
     {% endfor %}
-  </details>
+  </div>
   {% else %}
   <a class="nav-item" href="{{ url_for(endpoint,tab=key) }}" {% if key==active_menu %}aria-current="page"{% endif %}>
     {{ staff_icon(icon) }}<span>{{ label }}</span>
   </a>
   {% endif %}
   {% endfor %}
-  {% if is_admin %}</details>{% endif %}
   {% endfor %}
 </nav>
 {% endmacro %}
@@ -64,12 +71,12 @@
   <header class="topbar">
     <a class="brand" href="{{ home_url }}" aria-label="말결 TM · {{ role_name }} 대시보드">말결 <span>TM</span></a>
     <div class="topbar-inner">
-      <details class="mobile-menu"><summary aria-label="업무 메뉴">{{ staff_icon('menu') }} 메뉴</summary>{{ navigation('mobile') }}</details>
+      <details class="mobile-menu"><summary aria-label="업무 메뉴">{{ staff_icon('menu') }} 메뉴</summary>{{ navigation() }}</details>
       <span class="product">{{ staff_icon('screen') }}{{ role_name }} 프로그램</span>
       <div class="identity"><span class="online">접속 중</span><span class="profile-name">{{ staff_icon('person') }}{{ user.display_name or user.login_id }}</span><button type="button" data-logout>로그아웃</button></div>
     </div>
   </header>
-  <aside class="rail"><div class="rail-heading">업무 메뉴 {{ staff_icon('menu') }}</div>{{ navigation('desktop') }}</aside>
+  <aside class="rail"><div class="rail-heading">업무 메뉴 {{ staff_icon('menu') }}</div>{{ navigation() }}</aside>
   <main class="dashboard">
     <header class="board-title">
       <h1>{% block heading %}{% endblock %}</h1>

@@ -4,6 +4,7 @@
   const dialog = document.getElementById("voice-dialog");
   const start = document.getElementById("voice-start");
   const stop = document.getElementById("voice-stop");
+  const resolved = document.getElementById("voice-resolved");
   const state = document.getElementById("voice-state");
   const receipt = document.getElementById("voice-ticket");
   const audio = document.getElementById("voice-audio");
@@ -40,6 +41,7 @@
     audio.srcObject = null;
     audio.hidden = true;
     stop.hidden = true;
+    if (resolved) resolved.hidden = true;
     state.textContent = message;
     const wasRecording = Boolean(call.recorder?.url);
     if (wasRecording) recordingState.textContent = "녹취를 저장하고 있어요.";
@@ -74,7 +76,10 @@
     if (response.status !== "completed") return;
     const requests = (response.output || []).filter(item => item.type === "function_call" &&
       item.name === "request_agent" && item.call_id && !call.handled.has(item.call_id));
-    if (!requests.length) return;
+    if (!requests.length) {
+      if (resolved && !call.handedOff) resolved.hidden = false;
+      return;
+    }
     requests.forEach(item => call.handled.add(item.call_id));
     let output;
     try {
@@ -82,6 +87,8 @@
         method: "POST", body: {call_at: call.startedAt}, signal: call.controller.signal,
       });
       if (active !== call) return;
+      call.handedOff = true;
+      if (resolved) resolved.hidden = true;
       const number = ticket.case_id.slice(0, 8).toUpperCase();
       receipt.textContent = "상담원 요청을 접수했어요. 티켓 #" + number;
       receipt.hidden = false;
@@ -164,6 +171,7 @@
     consent.disabled = true;
     recordingState.hidden = true;
     receipt.hidden = true;
+    if (resolved) { resolved.hidden = true; resolved.disabled = false; }
     start.hidden = true;
     stop.hidden = false;
     stop.focus();
@@ -192,17 +200,11 @@
       await peer.setLocalDescription(offer);
       const signal = call.controller.signal;
       const record = Boolean(call.recorder);
-      const access = await api(sessions, {method: "POST", body: {recording_consent: record, summary_consent: record}, signal});
+      const access = await api(sessions, {method: "POST", body: {sdp: offer.sdp, recording_consent: record, summary_consent: record}, signal});
       call.id = access.voice_id;
       if (active !== call) { releaseSession(call.id).catch(() => {}); return; }
       call.greeting = access.greeting;
-      const answer = await fetch("https://api.openai.com/v1/realtime/calls", {
-        method: "POST", credentials: "omit", signal,
-        headers: {"Authorization": "Bearer " + access.client_secret, "Content-Type": "application/sdp"},
-        body: offer.sdp,
-      });
-      if (!answer.ok) throw new Error("AI가 음성 연결을 수락하지 않았어요. 다시 시작해 주세요.");
-      await peer.setRemoteDescription({type: "answer", sdp: await answer.text()});
+      await peer.setRemoteDescription({type: "answer", sdp: access.sdp});
     } catch (error) {
       if (active !== call) return;
       const message = {
@@ -217,6 +219,20 @@
 
   document.getElementById("voice-open")?.addEventListener("click", () => dialog.showModal());
   start.addEventListener("click", begin);
+  resolved?.addEventListener("click", async () => {
+    const call = active;
+    if (!call?.id || call.handedOff) return;
+    resolved.disabled = true;
+    try {
+      await api(sessions + "/" + call.id + "/resolve", {method: "POST", body: {}});
+      if (active === call) await finish("해결로 기록하고 통화를 종료했어요.");
+    } catch (error) {
+      if (active === call) {
+        state.textContent = error.message || "해결 기록을 저장하지 못했어요. 다시 눌러 주세요.";
+        resolved.disabled = false;
+      }
+    }
+  });
   stop.addEventListener("click", () => finish("음성 상담이 종료됐어요."));
   dialog.addEventListener("close", () => finish("음성 상담이 종료됐어요."));
   window.addEventListener("pagehide", () => finish("음성 상담이 종료됐어요."));

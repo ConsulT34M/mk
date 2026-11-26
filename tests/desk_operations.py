@@ -47,11 +47,38 @@ post(worker, "/admin/notices", notice, 403)
 post(guest, "/admin/notices", notice, 401)
 post(admin, "/admin/notices", notice, 201)
 post(admin, "/admin/notices", notice)
-assert title in page(worker, "/portal?tab=dashboard") and page(worker, "/portal?tab=notices").count(title)==1
+assert title in page(worker, "/portal?tab=dashboard") and page(worker, "/portal?tab=board").count(title)==1
 assert title not in page(guest, "/inquiry")
-previous = dict.fromkeys(staff)
-team = post(admin, "/admin/teams", dict(name="검증 "+uid(), members=staff[:2], previous=previous), 201)["team_id"]
-assert "현재 소속 기준" in page(admin, "/admin?tab=org&team="+team)
+with app.app_context():
+    default_team = one("SELECT team_id FROM staff_team WHERE name='고객 상담팀' AND is_default=TRUE")["team_id"]
+    assert one("SELECT COUNT(*) AS n FROM staff_account WHERE staff_id IN (%s,%s,%s) AND team_id=%s",
+               (*staff, default_team))["n"] == len(staff)
+previous = dict.fromkeys(staff, default_team)
+team_name = "검증 " + uid()
+team = post(admin, "/admin/teams", dict(name=team_name, members=staff[:2], previous=previous), 201)["team_id"]
+org = page(admin, "/admin?tab=org&team="+team)
+assert "현재 소속 기준" in org and 'aria-label="팀 조직도"' in org
+
+def team_dashboard(client):
+    html = client.get("/portal/updates?tab=dashboard&team=" + team).json["quota_html"]
+    return html.split('aria-label="팀 배정량"', 1)[1]
+
+assert "0 / 8건" in team_dashboard(worker) and team_name not in team_dashboard(outside)
+post(admin, "/admin/agents/"+staff[0]+"/quota", dict(daily=5,weekly=20,monthly=80))
+assert "0 / 9건" in team_dashboard(peer)
+post(admin, "/admin/agents/"+staff[0]+"/quota", dict(daily=4,weekly=20,monthly=80))
+team_edit = dict(name=team_name, previous_name=team_name, members=staff[:2],
+                 previous={**previous,staff[0]:team,staff[1]:team}, previous_goals=[None]*3,
+                 daily=0,weekly="",monthly=300)
+team_path = "/admin/teams/" + team
+post(worker, team_path, team_edit, 403)
+post(admin, team_path, {**team_edit, "monthly": -1}, 400)
+post(admin, team_path, team_edit)
+team_html = team_dashboard(worker)
+assert all(f"0 / {goal}건" in team_html for goal in (0,40,300))
+post(admin, team_path, {**team_edit, "daily": 7}, 409)
+post(admin, team_path, {**team_edit, "daily":"", "monthly":"", "previous_goals":[0,None,300]})
+assert "0 / 160건" in team_dashboard(worker)
 counts = dashboard_counts()
 for client, channel in [(worker,"WEB"),(peer,"PHONE"),(outside,"WEB")]:
     ticket = admin.post("/cases", json=dict(support_subject_ref=uid(),intake_request_id=uid(),channel=channel,inquiry_type="TRADE"),
@@ -109,13 +136,22 @@ assert phone_id in page(peer,"/portal?tab=recordings"+q)
 assert phone_id not in page(worker,"/portal?tab=recordings"+q)
 assert phone_id not in worker.get("/portal/updates?tab=closed").json["html"]
 assert phone_id not in worker.get("/portal/updates?tab=closed").json["history_html"]
+assert "2 / 8건" in team_dashboard(worker)
+transfer = admin.post("/cases", headers={"Authorization":"Bearer "+os.environ["PARTNER_TOKEN"]},
+                      json=dict(support_subject_ref=uid(),intake_request_id=uid(),channel="WEB")).json["case_id"]
+post(worker, "/staff/cases/"+transfer+"/claim", {})
+post(admin, "/staff/cases/"+transfer+"/assignee", {"new_agent_id":staff[1],"previous_agent_id":staff[0]})
+assert "배정 3건" in team_dashboard(worker) and "배정 4건" not in team_dashboard(worker)
 with app.app_context():
     name=one("SELECT name FROM staff_team WHERE team_id=%s",(team,))["name"]
 post(admin, "/admin/teams/"+team, dict(name=name,previous_name=name,previous=previous,members=[]),409)
 previous.update({staff[0]:team,staff[1]:team})
 post(admin, "/admin/teams/"+team, dict(name=name,previous_name=name,previous=previous,members=[staff[0]]))
 assert "기간 내 종결 상담 1건" in page(worker,"/portal?tab=stats&scope=team"+q)
-for tab in ("calls","chats","notices","ai","voice-recordings"):
+assert "1 / 4건" in team_dashboard(worker)
+unassigned = peer.get("/portal/updates?tab=dashboard").json["quota_html"]
+assert 'aria-label="내 배정량"' in unassigned and 'aria-label="팀 배정량"' not in unassigned
+for tab in ("calls","chats","board","ai","voice-recordings"):
     page(admin,"/admin?tab="+tab)
 for tab in ("calls","chats","closed"):
     page(worker,"/portal?tab="+tab)
@@ -129,6 +165,8 @@ prior_day = current_day - timedelta(days=1)
 before = [daily_guide(day) for day in (prior_day, current_day)]
 with app.app_context():
     migrate_desk()
+    assert one("SELECT team_id FROM staff_account WHERE staff_id=%s", (staff[0],))["team_id"] == team
+    assert one("SELECT team_id FROM staff_account WHERE staff_id=%s", (staff[1],))["team_id"] is None
     assert one("SELECT COUNT(*) AS n FROM staff_notice WHERE notice_id=%s", (notice["notice_id"],))["n"] == 1
     for offset in (0, 1):
         instant = midnight(current_day) - timedelta(seconds=offset)

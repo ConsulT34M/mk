@@ -120,7 +120,7 @@ if (-not $mkSettings.MYSQL_PASSWORD -or -not $mkSettings.PARTNER_TOKEN) { throw 
 $mkSettings | ConvertTo-Json | Set-Content C:\MKDesk\svc\settings.json -Encoding UTF8
 ```
 
-`settings.json`에는 실제 비밀값이 들어간다. 1단계에서 권한을 지정한 `svc` 폴더에 보관한다. AI 음성 사용 시 서버에서 `api.openai.com`으로 HTTPS 접속이 가능해야 한다. 필요하면 통화 모델 `OPENAI_REALTIME_MODEL`과 녹취 요약 모델 `OPENAI_CALL_SUMMARY_MODEL`도 같은 파일에 문자열로 지정한다. 설정을 변경하면 두 앱 서비스를 다시 시작한다.
+`settings.json`에는 실제 비밀값이 들어간다. 1단계에서 권한을 지정한 `svc` 폴더에 보관한다. 서버에서 `api.openai.com`으로 HTTPS 및 음성 사용량 수집용 WebSocket 접속이 가능해야 한다. 관리자의 ‘AI → AI 설정’에서 OpenAI 키와 채팅·통화·녹취 요약 모델을 변경하면 다음 요청부터 적용된다. 화면에서 등록한 키는 DB와 `RECORDING_DIR\.openai-settings.key`를 함께 백업해야 복원할 수 있다. 서버 기본값은 `OPENAI_API_KEY`, `OPENAI_CHAT_MODEL`, `OPENAI_REALTIME_MODEL`, `OPENAI_CALL_SUMMARY_MODEL`로 지정하며, 이 환경 변수를 변경하면 두 앱 서비스를 다시 시작한다.
 
 ## 4. 웹과 만료 정리를 Windows 서비스로 등록
 

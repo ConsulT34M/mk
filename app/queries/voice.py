@@ -59,6 +59,10 @@ def owned_session(voice_id, owner_hash):
     return one("SELECT subject_ref FROM voice_session WHERE voice_id=%s AND owner_hash=%s", (voice_id, owner_hash))
 
 
+def session_exists(voice_id):
+    return one("SELECT 1 FROM voice_session WHERE voice_id=%s", (voice_id,)) is not None
+
+
 def end_session(voice_id):
     # 종료된 통화의 세션을 삭제한다.
     run("DELETE FROM voice_session WHERE voice_id=%s", (voice_id,))
@@ -98,8 +102,9 @@ def update_phone_response(case_id, edits, metrics):
 def clear_phone_response(case_id):
     # 응대 내용을 비우고 녹취 동의 상태를 초기화한다.
     run(
-        "UPDATE phone_response SET call_at=NULL, consent_state='UNASKED', consent_by=NULL, consent_at=NULL, "
-        "inquiry=NULL, guidance=NULL, followup_required=NULL WHERE case_id=%s",
+        "UPDATE phone_response p JOIN support_case c USING(case_id) SET p.call_at=NULL,p.consent_state='UNASKED',"
+        "p.consent_by=NULL,p.consent_at=NULL,p.inquiry=NULL,p.guidance=NULL,p.followup_required=NULL,"
+        "c.call_direction=NULL,c.talk_seconds=NULL WHERE p.case_id=%s",
         (case_id,),
     )
 

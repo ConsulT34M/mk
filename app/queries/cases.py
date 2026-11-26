@@ -182,13 +182,11 @@ def clear_notes(case_id):
 
 
 def clear_result(case_id):
-    # 상담 결과 메모를 비운다.
-    run("UPDATE support_case SET result_note=NULL WHERE case_id=%s", (case_id,))
+    run("UPDATE support_case SET result_note=NULL,outcome=NULL WHERE case_id=%s", (case_id,))
 
 
-def update_result(case_id, result_note):
-    # 상담 결과 메모를 수정한다.
-    run("UPDATE support_case SET result_note=%s WHERE case_id=%s", (result_note, case_id))
+def update_result(case_id, result_note, outcome):
+    run("UPDATE support_case SET result_note=%s,outcome=%s WHERE case_id=%s", (result_note, outcome, case_id))
 
 
 def lock_for_deletion(case_id):

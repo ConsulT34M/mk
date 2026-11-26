@@ -2,10 +2,24 @@
 {% block title %}게시판 · {{ '관리자' if user.role == 'ADMIN' else '상담원' }} 데스크{% endblock %}
 {% block heading %}게시판{% endblock %}
 {% block heading_actions %}
-  {% if post or writing %}<a class="admin-btn" href="{{ url_for(endpoint, tab='board', page=page) }}">목록</a>
-  {% else %}<a class="admin-primary" href="{{ url_for(endpoint, tab='board', write=1) }}">글쓰기</a>{% endif %}
+  {% if post or writing %}<a class="admin-btn" href="{{ url_for(endpoint, tab='board', page=page) }}">목록</a>{% endif %}
 {% endblock %}
 {% block desk_content %}
+{% if not post and not writing %}
+<section class="board-panel admin-panel" aria-labelledby="board-notices">
+  <h3 id="board-notices">공지사항</h3>
+  {% if user.role == 'ADMIN' %}
+  <details><summary class="admin-primary">공지 작성</summary>
+    <form class="admin-stack editor-block" method="post" data-action="admin" action="{{ url_for('management.publish_notice') }}" data-done="공지사항을 게시했습니다.">
+      <input type="hidden" name="notice_id" value="{{ notice_id }}">
+      <label>제목<input name="title" maxlength="100" required></label>
+      <label>내용<textarea name="body" maxlength="3000" rows="5" required></textarea></label>
+      <button type="submit" class="admin-primary">게시</button>
+    </form>
+  </details>{% endif %}
+  {% include '_notices.html' %}
+</section>
+{% endif %}
 <section class="board-panel staff-board">
   {% if writing %}
   <h3>{{ '글 수정' if post else '글쓰기' }}</h3>
@@ -21,15 +35,16 @@
   <h3>{{ post.title }}</h3>
   <p class="board-byline">{{ post.author }} · <time datetime="{{ post.created_at|utcstamp }}">{{ post.created_at.strftime('%Y-%m-%d') }}</time></p>
   <div class="board-body">{{ post.body }}</div>
-  {% if post.author_id == user.staff_id %}
+  {% if can_delete %}
   <div class="admin-actions board-tools">
-    <a class="admin-btn" href="{{ url_for(endpoint, tab='board', page=page, post=post.post_id, write=1) }}">수정</a>
+    {% if post.author_id == user.staff_id %}<a class="admin-btn" href="{{ url_for(endpoint, tab='board', page=page, post=post.post_id, write=1) }}">수정</a>{% endif %}
     <form method="post" data-action="board" action="{{ url_for('board.change', post_id=post.post_id, page=page) }}" data-confirm="이 게시글을 삭제할까요?">
       <input type="hidden" name="operation" value="delete"><input type="hidden" name="revision" value="{{ post.revision }}">
       <button class="admin-btn danger" type="submit">삭제</button>
     </form>
   </div>{% endif %}
   {% else %}
+  <div class="section-title"><h3 id="board-posts">게시글 목록</h3><a class="admin-btn" href="{{ url_for(endpoint, tab='board', write=1) }}">글쓰기</a></div>
   <div class="table-scroll"><table class="admin-table"><thead><tr><th scope="col">제목</th><th scope="col">작성자</th><th scope="col">작성 일시</th></tr></thead><tbody>
     {% for item in items %}<tr><td><a href="{{ url_for(endpoint, tab='board', page=page, post=item.post_id) }}">{{ item.title }}</a></td>
       <td>{{ item.author }}</td><td><time datetime="{{ item.created_at|utcstamp }}">{{ item.created_at.strftime('%Y-%m-%d') }}</time></td></tr>

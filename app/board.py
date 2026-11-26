@@ -6,9 +6,14 @@ from pymysql.err import IntegrityError
 from .common import ApiError, payload, staff_user, text_field, uuid_field
 from .db import new_id
 from .queries import board as posts
+from .queries.staff import notices
 
 board = Blueprint("board", __name__, url_prefix="/staff/board")
 PAGE_SIZE = 20
+
+
+def can_delete_post(user, post):
+    return user["staff_id"] == post["author_id"] or (user["role"] == "ADMIN" and post["author_role"] == "AGENT")
 
 
 def board_page(user):
@@ -21,14 +26,16 @@ def board_page(user):
             return render_template("denied.html", user=user, error="게시글을 찾을 수 없습니다."), 404
         if writing and post["author_id"] != user["staff_id"]:
             return render_template("denied.html", user=user, error="작성자만 게시글을 수정할 수 있습니다."), 403
-    context = {}
+    context = {"can_delete": bool(post and can_delete_post(user, post))}
     if writing:
         context["post_id"] = post["post_id"] if post else new_id()
     elif not post:
         total = posts.count_posts()
         pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(page, pages)
-        context.update(items=posts.list_posts(PAGE_SIZE, (page - 1) * PAGE_SIZE), pages=pages)
+        context.update(items=posts.list_posts(PAGE_SIZE, (page - 1) * PAGE_SIZE), pages=pages, notices=notices())
+        if user["role"] == "ADMIN":
+            context["notice_id"] = new_id()
     return render_template("board.html", tab="board", user=user, post=post, writing=writing, page=page, **context)
 
 
@@ -65,9 +72,10 @@ def change(post_id):
     post = posts.get_post(post_id, lock=True)
     if not post:
         raise ApiError("BOARD_POST_NOT_FOUND")
-    if post["author_id"] != user["staff_id"]:
-        raise ApiError("CASE_ACCESS_DENIED")
     operation = data.get("operation")
+    allowed = can_delete_post(user, post) if operation == "delete" else post["author_id"] == user["staff_id"]
+    if not allowed:
+        raise ApiError("CASE_ACCESS_DENIED")
     if operation == "delete":
         title, body = None, None
     elif operation == "edit":
