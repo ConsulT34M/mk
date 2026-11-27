@@ -1,6 +1,8 @@
+# nginx 이미지가 시작할 때 이 파일의 ${PORTAL_SERVER_NAME}만 환경변수 값으로 바꿔
+# /etc/nginx/conf.d/default.conf를 만든다. $http_host 같은 nginx 변수는 그대로 남는다.
 server {
     listen 443 ssl;
-    server_name localhost;
+    server_name ${PORTAL_SERVER_NAME};
     ssl_certificate /etc/nginx/local-tls/cert.pem;
     ssl_certificate_key /etc/nginx/local-tls/key.pem;
     access_log off;

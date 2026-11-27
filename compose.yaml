@@ -1,10 +1,16 @@
 services:
   nginx:
     build: ./nginx
+    environment:
+      # nginx server_name과 자체 서명 인증서 이름. 배포 시 도메인
+      PORTAL_SERVER_NAME: ${PORTAL_SERVER_NAME:-localhost}
     ports:
-      - "127.0.0.1:${PORTAL_PORT:-8443}:443"
+      # 외부에서 직접 받으려면 .env에 PORTAL_BIND=0.0.0.0, PORTAL_PORT=443
+      - "${PORTAL_BIND:-127.0.0.1}:${PORTAL_PORT:-8443}:443"
     volumes:
-      - tls:/etc/nginx/local-tls
+      # 기본은 자체 서명 인증서를 담는 볼륨. 공인 인증서를 쓰면 PORTAL_TLS_DIR에
+      # cert.pem·key.pem이 있는 폴더 경로를 넣는다.
+      - ${PORTAL_TLS_DIR:-tls}:/etc/nginx/local-tls
     depends_on:
       app:
         condition: service_healthy
